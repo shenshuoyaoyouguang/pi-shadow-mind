@@ -33,3 +33,19 @@ describe("Shadow runtime protocol", () => {
     expect(request).toMatch(/First decide whether the trajectory is relevant[^]*Call report_to_main only when the main agent should receive a result\.$/);
   });
 });
+
+describe("buildShadowRequest brief", () => {
+  const shadow = { id: "a", name: "A", prompt: "do things" } as any;
+
+  it("injects a neutral brief line when provided", () => {
+    const result = buildShadowRequest("TRAJ", shadow, "main rewrote scheduler");
+    expect(result).toContain("唤醒理由（供参考）：main rewrote scheduler");
+    expect(result.indexOf("唤醒理由")).toBeGreaterThan(result.indexOf("<shadow-mind"));
+  });
+
+  it("keeps output identical when brief is omitted", () => {
+    const result = buildShadowRequest("TRAJ", shadow);
+    expect(result).not.toContain("唤醒理由");
+    expect(result).toBe(buildShadowRequest("TRAJ", shadow, undefined));
+  });
+});

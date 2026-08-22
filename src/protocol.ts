@@ -14,6 +14,7 @@ export function buildShadowSystemPrompt(mainSystemPrompt: string): string {
   return mainSystemPrompt;
 }
 
-export function buildShadowRequest(trajectory: string, shadow: ShadowDefinition): string {
-  return `${trajectory}\n\n${RUNTIME_PROTOCOL}\n\n<shadow-mind id="${shadow.id}" name="${shadow.name}">\n${shadow.prompt}\n</shadow-mind>\n\n${KICKOFF}`;
+export function buildShadowRequest(trajectory: string, shadow: ShadowDefinition, brief?: string): string {
+  const briefLine = brief ? `唤醒理由（供参考）：${brief}\n` : "";
+  return `${trajectory}\n\n${RUNTIME_PROTOCOL}\n\n<shadow-mind id="${shadow.id}" name="${shadow.name}">\n${briefLine}${shadow.prompt}\n</shadow-mind>\n\n${KICKOFF}`;
 }

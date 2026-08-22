@@ -60,6 +60,8 @@ export interface ShadowRunRequest {
   modelAuthOk?(model: Model<any>): boolean;
   /** The main session's effective thinking level at activation, used as the final fallback. */
   mainThinkingLevel?: ThinkingLevel;
+  /** One-line wake-up reason from the gatekeeper, injected as a neutral reference. */
+  brief?: string;
   onReport(report: ShadowReport): void;
 }
 
@@ -163,7 +165,7 @@ export class ShadowRunner {
         void boot.session?.abort();
       }, timeoutMs);
       controller.signal.addEventListener("abort", () => void boot.session?.abort(), { once: true });
-      await boot.session.prompt(buildShadowRequest(trajectory, request.shadow));
+      await boot.session.prompt(buildShadowRequest(trajectory, request.shadow, request.brief));
       await boot.session.waitForIdle();
       finalReason = runReason(state.timedOut, state.reported, controller.signal.aborted);
       return buildRunResult({ reason: finalReason, durationMs: Date.now() - started, session: boot.session, baseMessageCount, missingTools, thinkingLevel });
