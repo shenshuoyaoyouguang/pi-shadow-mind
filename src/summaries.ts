@@ -55,6 +55,10 @@ function textContent(content: unknown): string {
     .map((part) => part.text ?? "").join("\n");
 }
 
+/** Hard cap for line previews: a minified single-line bundle must not flood the prompt. */
+const PREVIEW_MAX_CHARS = 200;
+
 function compact(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
+  const collapsed = value.replace(/\s+/g, " ").trim();
+  return collapsed.length > PREVIEW_MAX_CHARS ? `${collapsed.slice(0, PREVIEW_MAX_CHARS)}…` : collapsed;
 }

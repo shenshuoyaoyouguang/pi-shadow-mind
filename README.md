@@ -84,7 +84,7 @@ Shadow definitions are ordinary Markdown files. They can be created and adjusted
 ### Installation
 
 ```bash
-pi install npm:pi-shadow-mind@0.1.11
+pi install npm:pi-shadow-mind@0.1.14
 ```
 
 On the first session start, the extension creates:
@@ -182,7 +182,7 @@ Shadow 定义只是普通 Markdown 文件，可以由用户创建和调整，也
 ### 安装
 
 ```bash
-pi install npm:pi-shadow-mind@0.1.11
+pi install npm:pi-shadow-mind@0.1.14
 ```
 
 首次启动 Session 时，扩展会创建：

@@ -7,6 +7,16 @@ describe("summarizeToolResult", () => {
     expect(summary).toBe("3 read · line1");
   });
 
+  it("caps long single-line previews at 200 characters", () => {
+    const summary = summarizeToolResult({ toolName: "read", content: [{ type: "text", text: "x".repeat(500) }], isError: false });
+    expect(summary).toBe(`1 read · ${"x".repeat(200)}…`);
+  });
+
+  it("keeps zero-line handling for empty read results", () => {
+    const summary = summarizeToolResult({ toolName: "read", content: [{ type: "text", text: "" }], isError: false });
+    expect(summary).toBe("0 read");
+  });
+
   it("prefixes error status", () => {
     const summary = summarizeToolResult({ toolName: "bash", content: [{ type: "text", text: "boom" }], isError: true });
     expect(summary).toMatch(/^error · /);

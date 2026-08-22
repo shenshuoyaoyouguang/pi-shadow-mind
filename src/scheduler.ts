@@ -53,10 +53,12 @@ export function decideHeartbeat(options: {
 }
 
 export function matchesModel(shadow: ShadowDefinition, fullModelId: string): boolean {
-  return shadow.activeForModels.includes("*") || shadow.activeForModels.includes(fullModelId);
+  const patterns = shadow.activeForModels ?? ["*"];
+  return patterns.includes("*") || patterns.includes(fullModelId);
 }
 
 function sample<T>(values: readonly T[], count: number, random: () => number): T[] {
+  if (count >= values.length) return [...values];
   const copy = [...values];
   for (let index = copy.length - 1; index > 0; index -= 1) {
     const swap = Math.floor(random() * (index + 1));

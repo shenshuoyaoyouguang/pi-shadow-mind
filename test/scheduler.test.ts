@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decideHeartbeat, shouldEvaluateHeartbeat } from "../src/scheduler.js";
+import { decideHeartbeat, matchesModel, shouldEvaluateHeartbeat } from "../src/scheduler.js";
 import type { ShadowDefinition } from "../src/types.js";
 
 const shadow = (id: string, probability = 1): ShadowDefinition => ({
@@ -50,5 +50,35 @@ describe("decideHeartbeat", () => {
     expect(result.modelFiltered).toEqual(["b"]);
     expect(result.activated).toEqual([]);
     expect(result.candidates).toEqual([]);
+  });
+
+  it("does not consume shuffle randoms when hits fit the available slots", () => {
+    let calls = 0;
+    const result = decideHeartbeat({
+      heartbeatProbability: 1,
+      availableSlots: 2,
+      shadows: [shadow("a"), shadow("b")],
+      activeShadowIds: new Set(),
+      mainModelId: "openai/gpt",
+      random: () => {
+        calls += 1;
+        return 0.1;
+      },
+    });
+    expect(result.activated.map(({ shadow }) => shadow.id)).toEqual(["a", "b"]);
+    expect(calls).toBe(3);
+  });
+});
+
+describe("matchesModel", () => {
+  it("defaults a missing activeForModels list to match every model", () => {
+    const { activeForModels: _omitted, ...bare } = shadow("a");
+    expect(matchesModel(bare as ShadowDefinition, "openai/gpt")).toBe(true);
+  });
+
+  it("matches exact model ids and rejects non-matching ones", () => {
+    const scoped = { ...shadow("a"), activeForModels: ["anthropic/claude"] };
+    expect(matchesModel(scoped, "openai/gpt")).toBe(false);
+    expect(matchesModel({ ...scoped, activeForModels: ["openai/gpt"] }, "openai/gpt")).toBe(true);
   });
 });

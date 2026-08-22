@@ -11,6 +11,7 @@ export interface ShadowConfig {
   defaultShadowModel?: string;
   defaultThinkingLevel: ThinkingLevel;
   randomSeed?: number;
+  extraFields?: Record<string, unknown>;
 }
 
 export interface ShadowDefinition {
@@ -26,6 +27,8 @@ export interface ShadowDefinition {
   tools: string[];
   prompt: string;
   filePath: string;
+  /** Unknown frontmatter keys preserved verbatim across round-trips. */
+  extraFields?: Record<string, unknown>;
 }
 
 export interface RegistryDiagnostic {

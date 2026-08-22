@@ -1,6 +1,7 @@
-import { readFile, unlink, writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { mkdir, readFile, stat, unlink } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import YAML from "yaml";
+import { atomicWriteFile } from "./atomic-file.js";
 import { serializeConfig } from "./config.js";
 import { parseShadowMarkdown, ShadowRegistry } from "./registry.js";
 import type { ShadowConfig, ShadowDefinition } from "./types.js";
@@ -21,19 +22,49 @@ export class EntityStore {
   }
 
   async create(draft: ShadowDraft): Promise<ShadowDefinition> {
-    if ((await this.list()).some((shadow) => shadow.id === draft.id)) throw new Error(`shadow already exists: ${draft.id}`);
+    if ((await this.list()).some((shadow) => shadow.id === draft.id)) throw new Error(`shadow '${draft.id}' already exists`);
     return this.writeParsed(join(this.registry.directory, `${draft.id}.md`), draft, { overwrite: false });
   }
 
   async update(id: string, patch: Partial<Omit<ShadowDraft, "id">>): Promise<ShadowDefinition> {
     const current = await this.get(id);
-    return this.writeParsed(current.filePath, { ...current, ...definedOnly(patch), id, prompt: patch.prompt ?? current.prompt }, { overwrite: true });
+    try {
+      await stat(current.filePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        throw new Error(`shadow not found: ${id}`);
+      }
+      throw error;
+    }
+    const merged: ShadowDraft = { ...current, ...definedOnly(patch), id, prompt: patch.prompt ?? current.prompt };
+    if (current.extraFields && !merged.extraFields) merged.extraFields = current.extraFields;
+    else if (current.extraFields && merged.extraFields) merged.extraFields = { ...current.extraFields, ...merged.extraFields };
+    return this.writeParsed(current.filePath, merged, { overwrite: true });
   }
 
   private async writeParsed(filePath: string, draft: ShadowDraft, options: { overwrite: boolean }): Promise<ShadowDefinition> {
     const source = serializeShadow({ ...draft, prompt: draft.prompt ?? "Describe this Shadow Mind's responsibility." });
     const parsed = parseShadowMarkdown(source, filePath);
-    await writeFile(filePath, source, { encoding: "utf8", ...(options.overwrite ? {} : { flag: "wx" }) });
+    try {
+      await atomicWriteFile(filePath, source, options);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+        throw new Error(`shadow '${draft.id}' already exists`);
+      }
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        await mkdir(dirname(filePath), { recursive: true });
+        try {
+          await atomicWriteFile(filePath, source, options);
+        } catch (retryError) {
+          if ((retryError as NodeJS.ErrnoException).code === "EEXIST") {
+            throw new Error(`shadow '${draft.id}' already exists`);
+          }
+          throw retryError;
+        }
+      } else {
+        throw error;
+      }
+    }
     return parsed;
   }
 
@@ -42,7 +73,28 @@ export class EntityStore {
   }
 
   async delete(id: string): Promise<void> {
-    await unlink((await this.get(id)).filePath);
+    let filePath: string;
+    try {
+      filePath = (await this.get(id)).filePath;
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith("shadow not found:")) {
+        filePath = join(this.registry.directory, `${id}.md`);
+        try {
+          await unlink(filePath);
+        } catch (inner) {
+          if ((inner as NodeJS.ErrnoException).code === "ENOENT") return;
+          throw inner;
+        }
+        return;
+      }
+      throw error;
+    }
+    try {
+      await unlink(filePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
   }
 
   async readConfig(): Promise<string> {
@@ -50,7 +102,7 @@ export class EntityStore {
   }
 
   async writeConfig(config: ShadowConfig): Promise<void> {
-    await writeFile(this.configPath, serializeConfig(config), "utf8");
+    await atomicWriteFile(this.configPath, serializeConfig(config), { overwrite: true });
   }
 }
 
@@ -66,6 +118,7 @@ export function serializeShadow(shadow: ShadowDraft): string {
     ...(shadow.thinkingLevel ? { thinking_level: shadow.thinkingLevel } : {}),
     ...(shadow.timeoutSeconds !== undefined ? { timeout_seconds: shadow.timeoutSeconds } : {}),
     tools: shadow.tools ?? [],
+    ...(shadow.extraFields ?? {}),
   };
   return `---\n${YAML.stringify(frontmatter).trimEnd()}\n---\n\n${(shadow.prompt ?? "").trim()}\n`;
 }

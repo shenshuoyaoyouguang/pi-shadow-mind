@@ -223,7 +223,7 @@ Shadow 上下文以 Main 能看到的完整上下文为基础做减法，而不�
 - 用户消息；
 - Main 的普通文本；
 - 工具调用及其结果概述；
-- 已注入 Main 会话的历史 `shadow-report`；
+- 已注入 Main 会话的历史 `shadow-report`（有界保留，规则见 §6）；
 - 当前 Shadow Mind 的定义。
 
 Main system prompt 保持完整原文，不追加 Shadow 专属 suffix，既避免 Shadow 遗漏 Main 必须遵守的约束，也使 Main 与所有 Shadow 共享完全相同的 system prompt cache。system prompt 之后只有一条真实的用户消息：先放净化后的纯文本轨迹，再声明 Shadow 公共协议和当前 Shadow Markdown 定义，最后以 kickoff 结束并启动本轮。不伪造 assistant 身份交接消息。
@@ -239,7 +239,7 @@ Main system prompt
 
 这里的“全部历史”以 Main 激活时实际可见的上下文为准。Main 已发生 compaction 时，Shadow 继承压缩后的上下文，不绕过 compaction 读取已被替换的原始消息。
 
-由于净化轨迹是 Main 上下文的严格子集，第一版不增加单独的摘要或截断机制。如果某个 Shadow 配置的 `run_with_model` 上下文窗口更小而无法容纳轨迹，则该次激活失败并记录原因，不生成介入消息。
+由于净化轨迹是 Main 上下文的严格子集，轨迹本身不增加摘要或截断机制，完整继承 Main 可见上下文；唯一的例外是历史 `shadow-report` 反馈链按 §6 有界保留。如果某个 Shadow 配置的 `run_with_model` 上下文窗口更小而无法容纳轨迹，则该次激活失败并记录原因，不生成介入消息。
 
 以下内容不进入 Shadow 上下文：
 
@@ -295,7 +295,7 @@ default heartbeat_probability = 1 / 3
 
 默认情况下，相邻 heartbeat 的期望间隔为 3 个符合条件的工具轮次，但实际间隔保持随机：可能连续发生，也可能较长时间不发生。
 
-第一版直接使用运行时随机数，不提供或持久化随机 seed，也不承诺重放同一调度序列。实际抽样值通过轻量调度事件保留，供事后分析。
+默认直接使用运行时随机数，不承诺重放同一调度序列。可选配置 `random_seed` 会以确定性 PRNG 代替运行时随机数，用于 benchmark 试验复现同一调度序列；生产会话默认不设置。实际抽样值通过轻量调度事件保留，供事后分析。
 
 heartbeat 发生时：
 
@@ -389,7 +389,7 @@ Main 声称项目已有 UserRole，但当前轨迹不足以支持该结论。
 
 `shadow-report` 在聊天中采用紧凑展开样式，直接显示章鱼标识、来源 Shadow 名称和完整报告内容，但视觉层级弱于用户消息和 Main 普通回复，不使用大型对话气泡，也不默认折叠。
 
-历史 `shadow-report` 会进入后续 Shadow 的净化轨迹，形成显式反馈链。新的 Shadow 可以结合 Main 对既有报告的响应继续复查：问题已解决则保持沉默，尚未解决则再次上报。
+历史 `shadow-report` 会进入后续 Shadow 的净化轨迹，形成显式反馈链。为避免反馈链随会话增长无限制膨胀，轨迹只保留最近至多 3 份、合计不超过 4000 字符的 `shadow-report`，更早的报告以一条显式省略标记代替。新的 Shadow 可以结合 Main 对既有报告的响应继续复查：问题已解决则保持沉默，尚未解决则再次上报。
 
 Shadow 自己的静默工具调用和行动摘要不进入 Main 消息历史，也不进入后续 Shadow 的净化轨迹。它们只体现在共享的外部环境、Main Session 的轻量观测 entries 和可选 debug 日志中。Shadow 之间的显式认知传播只通过 `shadow-report` 发生。
 

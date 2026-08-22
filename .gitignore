@@ -4,6 +4,7 @@ dist/
 .build/
 release/
 benchmark-results/
+.omo/
 __pycache__/
 *.py[cod]
 *.log

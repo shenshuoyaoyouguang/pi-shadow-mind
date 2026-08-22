@@ -1,8 +1,20 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+import { atomicWriteFile } from "./atomic-file.js";
 import type { ShadowConfig } from "./types.js";
 import { inRange, isFiniteNumber, isNonEmptyString, isThinkingLevel } from "./validation.js";
+
+const KNOWN_CONFIG_KEYS = new Set([
+  "heartbeat_probability",
+  "max_parallel_shadows",
+  "default_shadow_timeout_seconds",
+  "headless_drain_timeout_seconds",
+  "result_batch_window_ms",
+  "default_shadow_model",
+  "default_thinking_level",
+  "random_seed",
+]);
 
 export const DEFAULT_CONFIG: ShadowConfig = {
   heartbeatProbability: 1 / 3,
@@ -29,6 +41,10 @@ export function parseConfig(input: unknown): ShadowConfig {
   if (!isThinkingLevel(thinking)) {
     throw new Error("default_thinking_level is invalid");
   }
+  const extraFields: Record<string, unknown> = {};
+  for (const [key, val] of Object.entries(value)) {
+    if (!KNOWN_CONFIG_KEYS.has(key)) extraFields[key] = val;
+  }
   return {
     heartbeatProbability: probability,
     maxParallelShadows: parallel,
@@ -38,6 +54,7 @@ export function parseConfig(input: unknown): ShadowConfig {
     defaultShadowModel: model,
     defaultThinkingLevel: thinking as ThinkingLevel,
     randomSeed,
+    ...(Object.keys(extraFields).length ? { extraFields } : {}),
   };
 }
 
@@ -51,6 +68,7 @@ export function serializeConfig(config: ShadowConfig): string {
     ...(config.defaultShadowModel ? { default_shadow_model: config.defaultShadowModel } : {}),
     default_thinking_level: config.defaultThinkingLevel,
     ...(config.randomSeed !== undefined ? { random_seed: config.randomSeed } : {}),
+    ...(config.extraFields ?? {}),
   }, null, 2)}\n`;
 }
 
@@ -69,7 +87,7 @@ export class ConfigStore {
       await readFile(this.configPath, "utf8");
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      await writeFile(this.configPath, serializeConfig(DEFAULT_CONFIG), "utf8");
+      await atomicWriteFile(this.configPath, serializeConfig(DEFAULT_CONFIG), { overwrite: true });
     }
     await this.reload();
   }

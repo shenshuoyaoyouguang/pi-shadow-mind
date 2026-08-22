@@ -19,6 +19,8 @@ import { ShadowRunner, resolveShadowTools, type ShadowRunResult } from "./shadow
 import { waitForSettled } from "./shutdown-drain.js";
 import type { RuntimeEvent, ShadowDefinition, ShadowReport } from "./types.js";
 
+const ABORT_GRACE_MS = 5_000;
+
 export class ShadowMindRuntime {
   private readonly agentDir = getAgentDir();
   private readonly configStore = new ConfigStore(this.agentDir);
@@ -26,9 +28,12 @@ export class ShadowMindRuntime {
   private readonly entityStore = new EntityStore(this.registry, this.configStore.configPath);
   private readonly runner = new ShadowRunner();
   private readonly active = new Map<string, { shadow: ShadowDefinition; epoch: number }>();
+  private readonly watchdogs = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly recentEvents: RuntimeEvent[] = [];
   private readonly batcher: ReportBatcher;
   private readonly sessionLifetime = new SessionLifetime();
+  private heartbeatChain: Promise<void> = Promise.resolve();
+  private heartbeatEpoch = 0;
   private epoch = 0;
   private modelCalls = 0;
   private paused = false;
@@ -38,7 +43,7 @@ export class ShadowMindRuntime {
   private shadowCount = 0;
   private random: () => number = Math.random;
 
-  constructor(private readonly pi: ExtensionAPI) {
+  constructor(private readonly pi: ExtensionAPI, private readonly options: { abortGraceMs?: number } = {}) {
     this.batcher = new ReportBatcher(this.configStore.current.resultBatchWindowMs, (reports) => this.deliverReports(reports));
   }
 
@@ -64,6 +69,7 @@ export class ShadowMindRuntime {
     this.pi.on("input", (event, ctx) => {
       this.latestContext = ctx;
       if (event.source === "extension") return;
+      this.heartbeatEpoch += 1;
       this.epoch += 1;
       this.abortAll("new-user-input");
     });
@@ -87,6 +93,7 @@ export class ShadowMindRuntime {
       if (event.reason === "quit" && (ctx.mode === "print" || ctx.mode === "json")) {
         await this.drainHeadless(ctx);
       }
+      this.heartbeatEpoch += 1;
       this.epoch += 1;
       this.abortAll("session-shutdown");
       ctx.ui.setStatus("shadow-mind", undefined);
@@ -142,8 +149,24 @@ export class ShadowMindRuntime {
     });
   }
 
-  private async onHeartbeat(ctx: ExtensionContext): Promise<void> {
+  /** Serialized so concurrent turn_end events cannot oversubscribe parallel slots. */
+  private onHeartbeat(ctx: ExtensionContext): Promise<void> {
+    const heartbeatEpoch = this.heartbeatEpoch;
+    const next = this.heartbeatChain.then(() => this.runHeartbeat(ctx, heartbeatEpoch));
+    this.heartbeatChain = next.catch(() => {});
+    // The chain swallows rejections so one failed heartbeat cannot poison the next;
+    // the caller still gets a settled promise, so Pi never sees an unhandled rejection.
+    return next.catch((error) => {
+      this.record("heartbeat-error", { error: error instanceof Error ? error.message : String(error) });
+    });
+  }
+
+  private async runHeartbeat(ctx: ExtensionContext, heartbeatEpoch: number): Promise<void> {
     await this.refresh(ctx);
+    if (heartbeatEpoch !== this.heartbeatEpoch) {
+      this.record("heartbeat-skipped", { reason: "stale-heartbeat", modelCalls: this.modelCalls });
+      return;
+    }
     if (this.paused || !ctx.model) {
       this.record("heartbeat-skipped", { reason: this.paused ? "paused" : "no-model", modelCalls: this.modelCalls });
       return;
@@ -171,6 +194,7 @@ export class ShadowMindRuntime {
     const context = buildSessionContext(ctx.sessionManager.getEntries(), ctx.sessionManager.getLeafId());
     const availableTools = new Set(this.pi.getAllTools().map((tool) => tool.name));
     for (const { shadow } of decision.activated) {
+      if (this.paused || heartbeatEpoch !== this.heartbeatEpoch) break;
       this.launchShadow(ctx, shadow, ctx.model, fullModelId, context, availableTools);
     }
   }
@@ -203,28 +227,35 @@ export class ShadowMindRuntime {
       mainThinkingLevel: ctx.thinkingLevel,
       onReport: (report) => this.acceptReport(report),
     }).then((result) => this.handleRunEnd(runId, shadow, result)).catch((error) => {
+      this.releaseWatchdog(runId);
       this.active.delete(runId);
-      this.record("run-end", {
-        runId,
-        shadowId: shadow.id,
-        reason: "error",
-        error: error instanceof Error ? error.message : String(error),
-      });
+      try {
+        this.record("run-end", {
+          runId,
+          shadowId: shadow.id,
+          reason: "error",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      } catch {
+        // Error-path logging must never escalate into an unhandled rejection.
+      }
     });
   }
 
   private handleRunEnd(runId: string, shadow: ShadowDefinition, result: ShadowRunResult): void {
+    this.releaseWatchdog(runId);
     this.active.delete(runId);
     this.record("run-end", { runId, shadowId: shadow.id, ...result });
     if (this.latestContext && this.sessionLifetime.isActive) this.updateStatus(this.latestContext);
   }
 
   private acceptReport(report: ShadowReport): void {
-    if (report.epoch !== this.epoch) return;
+    if (this.paused || report.epoch !== this.epoch) return;
     this.batcher.add(report);
   }
 
   private async deliverReports(reports: ShadowReport[]): Promise<void> {
+    if (this.paused) return;
     const current = reports.filter((report) => report.epoch === this.epoch);
     if (!current.length) return;
     const content = formatReportBatch(current);
@@ -254,8 +285,49 @@ export class ShadowMindRuntime {
 
   private abortAll(reason: string): void {
     this.runner.abortAll();
-    this.batcher.clear();
+    const dropped = this.batcher.clear();
     this.record("runs-aborted", { reason, count: this.active.size });
+    if (dropped > 0) this.record("reports-dropped", { reason, count: dropped });
+    for (const runId of this.active.keys()) this.armWatchdog(runId);
+  }
+
+  /**
+   * An aborted session whose waitForIdle never settles would leak its active
+   * entry and permanently reduce the parallel quota. After the grace period the
+   * runtime force-releases the slot instead of waiting forever. The timer is
+   * unref'd so a still-armed watchdog can never hold a headless process open,
+   * and it intentionally survives session_shutdown: the runtime outlives TUI
+   * session replacement, so the backstop must keep working across it.
+   */
+  private armWatchdog(runId: string): void {
+    if (this.watchdogs.has(runId)) return;
+    const timer = setTimeout(() => {
+      this.watchdogs.delete(runId);
+      const entry = this.active.get(runId);
+      if (!entry) return;
+      this.active.delete(runId);
+      this.record("run-watchdog-cleared", { runId, shadowId: entry.shadow.id });
+      if (this.latestContext && this.sessionLifetime.isActive) this.updateStatus(this.latestContext);
+    }, this.options.abortGraceMs ?? ABORT_GRACE_MS);
+    timer.unref();
+    this.watchdogs.set(runId, timer);
+  }
+
+  private releaseWatchdog(runId: string): void {
+    const timer = this.watchdogs.get(runId);
+    if (!timer) return;
+    clearTimeout(timer);
+    this.watchdogs.delete(runId);
+  }
+
+  private disarmWatchdogs(): void {
+    for (const timer of this.watchdogs.values()) clearTimeout(timer);
+    this.watchdogs.clear();
+  }
+
+  private forceClearActive(): void {
+    this.disarmWatchdogs();
+    this.active.clear();
   }
 
   private async drainHeadless(ctx: ExtensionContext): Promise<void> {
@@ -273,7 +345,11 @@ export class ShadowMindRuntime {
       durationMs: result.durationMs,
       active: this.active.size,
     });
-    if (!result.settled) this.abortAll("headless-drain-timeout");
+    if (!result.settled) {
+      this.abortAll("headless-drain-timeout");
+      this.forceClearActive();
+      this.updateStatus(ctx);
+    }
   }
 
   private record(kind: string, data?: Record<string, unknown>): void {
@@ -285,7 +361,13 @@ export class ShadowMindRuntime {
 
   private setPaused(paused: boolean, ctx: ExtensionContext): void {
     this.paused = paused;
-    if (paused) this.abortAll("paused");
+    if (paused) {
+      this.heartbeatEpoch += 1;
+      this.abortAll("paused");
+      // Invalidate results accepted around the pause so nothing can re-arm the
+      // batch window in the microtask gap and deliver after resume.
+      this.epoch += 1;
+    }
     ctx.ui.notify(paused ? "Shadow Mind paused" : "Shadow Mind resumed", "info");
     this.updateStatus(ctx);
   }

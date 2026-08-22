@@ -4,6 +4,7 @@ export class ReportBatcher {
   private reports: ShadowReport[] = [];
   private timer?: ReturnType<typeof setTimeout>;
   private deliveries = 0;
+  private queue: Promise<void> = Promise.resolve();
 
   constructor(private windowMs: number, private readonly deliver: (reports: ShadowReport[]) => void | Promise<void>) {}
 
@@ -14,10 +15,22 @@ export class ReportBatcher {
   add(report: ShadowReport): void {
     this.reports.push(report);
     if (this.timer) return;
-    this.timer = setTimeout(() => void this.flush(), this.windowMs);
+    // Delivery failures are contained here: a fire-and-forget timer callback
+    // must not leak an unhandled rejection into the host process.
+    this.timer = setTimeout(() => {
+      this.timer = undefined;
+      void this.flush().catch(() => {});
+    }, this.windowMs);
   }
 
-  async flush(): Promise<void> {
+  /** Serialized: at most one delivery is in flight at any time. */
+  flush(): Promise<void> {
+    const run = this.queue.then(() => this.deliverPending());
+    this.queue = run.catch(() => {});
+    return run;
+  }
+
+  private async deliverPending(): Promise<void> {
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
     if (!this.reports.length) return;
@@ -35,10 +48,12 @@ export class ReportBatcher {
     return this.reports.length > 0 || this.timer !== undefined || this.deliveries > 0;
   }
 
-  clear(): void {
+  clear(): number {
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
+    const dropped = this.reports.length;
     this.reports = [];
+    return dropped;
   }
 }
 

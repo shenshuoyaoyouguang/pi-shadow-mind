@@ -20,7 +20,7 @@ const mock = vi.hoisted(() => {
     sessionFile = "/tmp/fake/session.jsonl";
     aborted = false;
     disposed = false;
-    behavior: "silent" | "report" | "tools" | "throw" | "hang" = "silent";
+    behavior: "silent" | "report" | "empty-report" | "empty-then-report" | "double-report" | "report-then-hang" | "tools" | "throw" | "hang" = "silent";
     promptError: Error | undefined;
     options: any;
     private release?: (err?: Error) => void;
@@ -34,6 +34,11 @@ const mock = vi.hoisted(() => {
     }
 
     async prompt(): Promise<void> {
+      const reportTool = () => this.options.customTools?.find((tool: any) => tool.name === "report_to_main");
+      const callReport = async (toolCallId: string, content: string) => {
+        const result = await reportTool().execute(toolCallId, { content }, undefined, undefined, {} as any);
+        return result.terminate === true;
+      };
       if (this.behavior === "hang") {
         await new Promise<void>((resolve, reject) => {
           this.release = (err) => (err ? reject(err) : resolve());
@@ -45,8 +50,28 @@ const mock = vi.hoisted(() => {
       }
       if (this.behavior === "report") {
         // Simulate the model calling the (real) built-in report_to_main tool.
-        const reportTool = this.options.customTools?.find((tool: any) => tool.name === "report_to_main");
-        await reportTool.execute("call-1", { content: "found a smell" }, undefined, undefined, {} as any);
+        await callReport("call-1", "found a smell");
+        return;
+      }
+      if (this.behavior === "empty-report") {
+        await callReport("call-1", "   ");
+        return;
+      }
+      if (this.behavior === "empty-then-report") {
+        if (await callReport("call-1", "   ")) return;
+        await callReport("call-2", "found after retry");
+        return;
+      }
+      if (this.behavior === "double-report") {
+        await callReport("call-1", "first");
+        await callReport("call-2", "second");
+        return;
+      }
+      if (this.behavior === "report-then-hang") {
+        await callReport("call-1", "delivered before timeout");
+        await new Promise<void>((resolve, reject) => {
+          this.release = (err) => (err ? reject(err) : resolve());
+        });
         return;
       }
       if (this.behavior === "tools") {
@@ -210,5 +235,63 @@ describe("ShadowRunner.run integration", () => {
     expect(result.reason).toBe("aborted");
     expect(session.aborted).toBe(true);
     expect(result.toolCalls).toBe(0);
+  });
+
+  it("accepts trajectories that fit under the chars/4 token estimate", async () => {
+    const runner = new ShadowRunner();
+    // ~200k serialized chars: chars/2 falsely estimated ~100k > 100000 window.
+    const result = await runner.run(makeRequest({
+      messages: [{ role: "user", content: [{ type: "text", text: "x".repeat(200000) }] }],
+    }));
+    expect(result.reason).toBe("silent");
+    expect(result.error).toBeUndefined();
+  });
+
+  it("still rejects trajectories exceeding the context window under the relaxed estimate", async () => {
+    const runner = new ShadowRunner();
+    const result = await runner.run(makeRequest({
+      messages: [{ role: "user", content: [{ type: "text", text: "x".repeat(400000) }] }],
+    }));
+    expect(result.reason).toBe("error");
+    expect(result.error).toMatch(/exceeds test\/model context window \(100000\)/);
+  });
+
+  it("treats an empty report as silence instead of delivering it", async () => {
+    const runner = new ShadowRunner();
+    const onReport = vi.fn();
+    behavior = "empty-report";
+    const result = await runner.run(makeRequest({ onReport }));
+    expect(result.reason).toBe("silent");
+    expect(onReport).not.toHaveBeenCalled();
+  });
+
+  it("allows retry after report_to_main rejects empty content", async () => {
+    const runner = new ShadowRunner();
+    const onReport = vi.fn();
+    behavior = "empty-then-report";
+    const result = await runner.run(makeRequest({ onReport }));
+    expect(result.reason).toBe("report");
+    expect(onReport).toHaveBeenCalledTimes(1);
+    expect(onReport).toHaveBeenCalledWith(expect.objectContaining({ content: "found after retry" }));
+  });
+
+  it("classifies a delivered report as report even when the timeout races", async () => {
+    const runner = new ShadowRunner();
+    const onReport = vi.fn();
+    behavior = "report-then-hang";
+    const result = await runner.run(makeRequest({ onReport, config: { ...makeRequest().config, defaultShadowTimeoutSeconds: 0.05 } }));
+    expect(result.reason).toBe("report");
+    expect(onReport).toHaveBeenCalledTimes(1);
+    expect(onReport).toHaveBeenCalledWith(expect.objectContaining({ content: "delivered before timeout" }));
+  });
+
+  it("delivers at most one report when report_to_main fires repeatedly", async () => {
+    const runner = new ShadowRunner();
+    const onReport = vi.fn();
+    behavior = "double-report";
+    const result = await runner.run(makeRequest({ onReport }));
+    expect(result.reason).toBe("report");
+    expect(onReport).toHaveBeenCalledTimes(1);
+    expect(onReport).toHaveBeenCalledWith(expect.objectContaining({ content: "first" }));
   });
 });

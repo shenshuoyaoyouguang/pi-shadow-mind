@@ -94,8 +94,8 @@ interface RunState {
 }
 
 function runReason(timedOut: boolean, reported: boolean, aborted: boolean, failed = false): ShadowRunResult["reason"] {
-  if (timedOut) return "timeout";
   if (reported) return "report";
+  if (timedOut) return "timeout";
   if (aborted) return "aborted";
   return failed ? "error" : "silent";
 }
@@ -205,7 +205,8 @@ export class ShadowRunner {
       }),
     });
     const reportTool = createReportTool((content) => {
-      if (state.reported || controller.signal.aborted) return;
+      if (!content.trim()) return false;
+      if (state.reported || controller.signal.aborted) return false;
       state.reported = true;
       request.onReport({
         shadowId: request.shadow.id,
@@ -215,6 +216,7 @@ export class ShadowRunner {
         runId: request.runId,
       });
       queueMicrotask(() => void state.session?.abort());
+      return true;
     });
     const tools = [...new Set(request.tools)];
     const created = await createAgentSession({
@@ -241,15 +243,44 @@ export class ShadowRunner {
   }
 }
 
-export function toolMetrics(messages: readonly { role?: string; toolName?: string; isError?: boolean }[]): { toolCalls: number; toolFailures: number; toolStats: ToolStat[] } {
+export interface ToolMetricsMessage {
+  role?: string;
+  toolName?: string;
+  isError?: boolean;
+  toolCallId?: string;
+  content?: unknown;
+}
+
+/**
+ * Count tool usage from tool results; a call aborted mid-flight leaves no
+ * result, so its assistant toolCall block is counted instead (matched by call
+ * id to avoid double-counting completed calls).
+ */
+export function toolMetrics(messages: readonly ToolMetricsMessage[]): { toolCalls: number; toolFailures: number; toolStats: ToolStat[] } {
   const stats = new Map<string, ToolStat>();
-  for (const message of messages) {
-    if (message.role !== "toolResult") continue;
-    const tool = message.toolName ?? "unknown";
+  const record = (tool: string, isError: boolean): void => {
     const entry = stats.get(tool) ?? { tool, calls: 0, failures: 0 };
     entry.calls += 1;
-    if (message.isError) entry.failures += 1;
+    if (isError) entry.failures += 1;
     stats.set(tool, entry);
+  };
+  const answered = new Set<string>();
+  for (const message of messages) {
+    if (message.role === "toolResult" && typeof message.toolCallId === "string") answered.add(message.toolCallId);
+  }
+  for (const message of messages) {
+    if (message.role !== "toolResult") continue;
+    record(message.toolName ?? "unknown", Boolean(message.isError));
+  }
+  for (const message of messages) {
+    if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
+    for (const block of message.content) {
+      if (!block || typeof block !== "object") continue;
+      const call = block as { type?: string; id?: string; name?: string };
+      if (call.type !== "toolCall" || !call.name) continue;
+      if (call.id && answered.has(call.id)) continue;
+      record(call.name, false);
+    }
   }
   const toolStats = [...stats.values()].sort((a, b) => b.calls - a.calls);
   return {
@@ -259,7 +290,7 @@ export function toolMetrics(messages: readonly { role?: string; toolName?: strin
   };
 }
 
-function createReportTool(onReport: (content: string) => void): ToolDefinition {
+function createReportTool(onReport: (content: string) => boolean): ToolDefinition {
   return {
     name: "report_to_main",
     label: "Report to Main",
@@ -268,8 +299,12 @@ function createReportTool(onReport: (content: string) => void): ToolDefinition {
     parameters: Type.Object({ content: Type.String({ description: "The complete report for the main agent" }) }),
     async execute(_toolCallId, params) {
       const content = (params as { content: string }).content;
-      onReport(content);
-      return { content: [{ type: "text", text: "Report delivered." }], details: {}, terminate: true };
+      const delivered = onReport(content);
+      return {
+        content: [{ type: "text", text: delivered ? "Report delivered." : "Report ignored (empty or duplicate)." }],
+        details: {},
+        ...(delivered ? { terminate: true } : {}),
+      };
     },
   };
 }
@@ -312,9 +347,14 @@ export function resolveRunThinkingLevel(model: Model<any>, request: ShadowRunReq
   throw new Error(`no supported thinking level for ${model.provider}/${model.id} (tried: ${candidates.join(", ") || "none"})`);
 }
 
+/**
+ * Rough fit check: real tokens ≈ serialized chars / 4, so chars / 2 rejected
+ * many trajectories that would actually fit. A 10% safety margin keeps the
+ * estimate conservative without the false rejections.
+ */
 function assertTrajectoryFits(model: Model<any>, messages: readonly unknown[]): void {
   const chars = messages.reduce<number>((sum, message) => sum + (JSON.stringify(message)?.length ?? 0), 0);
-  const estimated = Math.ceil(chars / 2);
+  const estimated = Math.ceil((chars / 4) * 1.1);
   if (estimated > model.contextWindow) {
     throw new Error(`trajectory ~${estimated} tokens exceeds ${model.provider}/${model.id} context window (${model.contextWindow})`);
   }
