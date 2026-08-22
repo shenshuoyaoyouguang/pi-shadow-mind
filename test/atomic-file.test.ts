@@ -1,0 +1,278 @@
+import { lstat, mkdir, readdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { mkdtemp, rm } from "node:fs/promises";
+import { describe, expect, it, vi } from "vitest";
+import { atomicWriteFile } from "../src/atomic-file.js";
+
+// Track fs.promises.link/copyFile so tests can simulate hardlink-unavailable
+// platforms (Windows without SeCreateSymbolicLinkPrivilege) and copy failures.
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    link: vi.fn((...args: Parameters<typeof actual.link>) => actual.link(...args)),
+    copyFile: vi.fn((...args: Parameters<typeof actual.copyFile>) => actual.copyFile(...args)),
+  };
+});
+
+async function makeDir(): Promise<string> {
+  return mkdtemp(join(tmpdir(), "pi-shadow-mind-atomic-"));
+}
+
+async function canCreateSymlink(): Promise<boolean> {
+  const dir = await mkdtemp(join(tmpdir(), "pi-shadow-mind-atomic-symlink-"));
+  try {
+    await symlink(join(dir, "target"), join(dir, "link"));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+const symlinkSupported = await canCreateSymlink();
+
+describe("atomicWriteFile", () => {
+  describe("overwrite: true (rename-based)", () => {
+    it("creates a new file with the given content and no tmp remnants", async () => {
+      const dir = await makeDir();
+      try {
+        const filePath = join(dir, "file.txt");
+        await atomicWriteFile(filePath, "hello world", { overwrite: true });
+        expect(await readFile(filePath, "utf8")).toBe("hello world");
+        const files = await readdir(dir);
+        expect(files.filter((f) => f.includes(".tmp"))).toEqual([]);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("overwrites existing content", async () => {
+      const dir = await makeDir();
+      try {
+        const filePath = join(dir, "file.txt");
+        await writeFile(filePath, "old content", "utf8");
+        await atomicWriteFile(filePath, "new content", { overwrite: true });
+        expect(await readFile(filePath, "utf8")).toBe("new content");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("creates missing parent directories recursively", async () => {
+      const dir = await makeDir();
+      try {
+        const filePath = join(dir, "nested", "deeper", "file.txt");
+        await atomicWriteFile(filePath, "nested content", { overwrite: true });
+        expect(await readFile(filePath, "utf8")).toBe("nested content");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it.skipIf(!symlinkSupported)(
+      "writes through an absolute symlink, preserving the symlink itself",
+      async () => {
+        const dir = await makeDir();
+        try {
+          const targetDir = join(dir, "target-dir");
+          await mkdir(targetDir, { recursive: true });
+          const targetPath = join(targetDir, "real.txt");
+          const linkPath = join(dir, "link.txt");
+          await writeFile(targetPath, "original", "utf8");
+          await symlink(targetPath, linkPath);
+
+          await atomicWriteFile(linkPath, "updated via symlink", { overwrite: true });
+
+          expect((await lstat(linkPath)).isSymbolicLink()).toBe(true);
+          expect(await readFile(targetPath, "utf8")).toBe("updated via symlink");
+          expect(await readFile(linkPath, "utf8")).toBe("updated via symlink");
+        } finally {
+          await rm(dir, { recursive: true, force: true });
+        }
+      },
+    );
+
+    it.skipIf(!symlinkSupported)(
+      "writes through a relative symlink, resolving relative to the link's directory",
+      async () => {
+        const dir = await makeDir();
+        try {
+          const targetPath = join(dir, "real.txt");
+          const linkPath = join(dir, "link.txt");
+          await writeFile(targetPath, "original", "utf8");
+          // Relative link target, resolved relative to dirname(linkPath) === dir.
+          await symlink("real.txt", linkPath);
+
+          await atomicWriteFile(linkPath, "updated via relative symlink", { overwrite: true });
+
+          expect((await lstat(linkPath)).isSymbolicLink()).toBe(true);
+          expect(await readFile(targetPath, "utf8")).toBe("updated via relative symlink");
+        } finally {
+          await rm(dir, { recursive: true, force: true });
+        }
+      },
+    );
+
+    it("falls back to filePath when the target does not exist yet (ENOENT)", async () => {
+      const dir = await makeDir();
+      try {
+        const filePath = join(dir, "does-not-exist-yet.txt");
+        await atomicWriteFile(filePath, "fresh content", { overwrite: true });
+        expect(await readFile(filePath, "utf8")).toBe("fresh content");
+        expect((await lstat(filePath)).isSymbolicLink()).toBe(false);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("propagates lstat errors other than ENOENT", async () => {
+      const dir = await makeDir();
+      try {
+        // A path with a non-directory path segment produces ENOTDIR on lstat,
+        // not ENOENT, and should not be silently swallowed.
+        const filePath = join(dir, "not-a-dir.txt");
+        await writeFile(filePath, "i am a file", "utf8");
+        const impossibleChildPath = join(filePath, "child.txt");
+        await expect(atomicWriteFile(impossibleChildPath, "x", { overwrite: true })).rejects.toThrow();
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe("overwrite: false (hardlink-based create)", () => {
+    it("creates a new file via hardlink", async () => {
+      const dir = await makeDir();
+      try {
+        const filePath = join(dir, "created.txt");
+        await atomicWriteFile(filePath, "created content", { overwrite: false });
+        expect(await readFile(filePath, "utf8")).toBe("created content");
+        const files = await readdir(dir);
+        expect(files.filter((f) => f.includes(".tmp"))).toEqual([]);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("throws EEXIST when the target already exists and does not overwrite it", async () => {
+      const dir = await makeDir();
+      try {
+        const filePath = join(dir, "exists.txt");
+        await writeFile(filePath, "original", "utf8");
+        await expect(atomicWriteFile(filePath, "attempted overwrite", { overwrite: false })).rejects.toMatchObject({
+          code: "EEXIST",
+        });
+        expect(await readFile(filePath, "utf8")).toBe("original");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("cleans up the tmp file even when link() throws EEXIST", async () => {
+      const dir = await makeDir();
+      try {
+        const filePath = join(dir, "exists2.txt");
+        await writeFile(filePath, "original", "utf8");
+        await expect(atomicWriteFile(filePath, "x", { overwrite: false })).rejects.toBeTruthy();
+        const files = await readdir(dir);
+        expect(files.filter((f) => f.includes(".tmp"))).toEqual([]);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("falls back to O_EXCL claim + copy when link() fails with EPERM", async () => {
+      const { link } = await import("node:fs/promises");
+      const linkMock = link as unknown as { mockRejectedValueOnce: (value: unknown) => void };
+      linkMock.mockRejectedValueOnce(Object.assign(new Error("EPERM: operation not permitted, link"), { code: "EPERM" }));
+      const dir = await makeDir();
+      try {
+        const filePath = join(dir, "fallback-eperm.txt");
+        await atomicWriteFile(filePath, "fallback content", { overwrite: false });
+        expect(await readFile(filePath, "utf8")).toBe("fallback content");
+        const files = await readdir(dir);
+        expect(files.filter((f) => f.includes(".tmp"))).toEqual([]);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("falls back to O_EXCL claim + copy when link() fails with EACCES", async () => {
+      const { link } = await import("node:fs/promises");
+      const linkMock = link as unknown as { mockRejectedValueOnce: (value: unknown) => void };
+      linkMock.mockRejectedValueOnce(Object.assign(new Error("EACCES: permission denied, link"), { code: "EACCES" }));
+      const dir = await makeDir();
+      try {
+        const filePath = join(dir, "fallback-eacces.txt");
+        await atomicWriteFile(filePath, "fallback content", { overwrite: false });
+        expect(await readFile(filePath, "utf8")).toBe("fallback content");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("falls back to O_EXCL claim + copy when link() fails with EXDEV (cross-device)", async () => {
+      const { link } = await import("node:fs/promises");
+      const linkMock = link as unknown as { mockRejectedValueOnce: (value: unknown) => void };
+      linkMock.mockRejectedValueOnce(Object.assign(new Error("EXDEV: cross-device link not permitted"), { code: "EXDEV" }));
+      const dir = await makeDir();
+      try {
+        const filePath = join(dir, "fallback-exdev.txt");
+        await atomicWriteFile(filePath, "fallback content", { overwrite: false });
+        expect(await readFile(filePath, "utf8")).toBe("fallback content");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("propagates unexpected link() error codes without attempting fallback", async () => {
+      const { link, copyFile } = await import("node:fs/promises");
+      const linkMock = link as unknown as { mockRejectedValueOnce: (value: unknown) => void };
+      const copyFileMock = copyFile as unknown as { mock: { calls: unknown[][] } };
+      linkMock.mockRejectedValueOnce(Object.assign(new Error("EIO: i/o error, link"), { code: "EIO" }));
+      const dir = await makeDir();
+      try {
+        const callsBefore = copyFileMock.mock.calls.length;
+        const filePath = join(dir, "unexpected-error.txt");
+        await expect(atomicWriteFile(filePath, "x", { overwrite: false })).rejects.toMatchObject({ code: "EIO" });
+        expect(copyFileMock.mock.calls.length).toBe(callsBefore);
+        const files = await readdir(dir);
+        expect(files.filter((f) => f.includes(".tmp"))).toEqual([]);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("unlinks the claimed file if copyFile fails during fallback, and propagates the error", async () => {
+      const { link, copyFile } = await import("node:fs/promises");
+      const linkMock = link as unknown as { mockRejectedValueOnce: (value: unknown) => void };
+      const copyFileMock = copyFile as unknown as { mockRejectedValueOnce: (value: unknown) => void };
+      linkMock.mockRejectedValueOnce(Object.assign(new Error("EPERM: operation not permitted, link"), { code: "EPERM" }));
+      copyFileMock.mockRejectedValueOnce(new Error("disk full"));
+      const dir = await makeDir();
+      try {
+        const filePath = join(dir, "claim-copy-fail.txt");
+        await expect(atomicWriteFile(filePath, "x", { overwrite: false })).rejects.toThrow("disk full");
+        // The exclusively-claimed (empty) file must be removed, not left behind.
+        const files = await readdir(dir);
+        expect(files).not.toContain("claim-copy-fail.txt");
+        expect(files.filter((f) => f.includes(".tmp"))).toEqual([]);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("creates missing parent directories recursively", async () => {
+      const dir = await makeDir();
+      try {
+        const filePath = join(dir, "nested", "deeper", "created.txt");
+        await atomicWriteFile(filePath, "nested created", { overwrite: false });
+        expect(await readFile(filePath, "utf8")).toBe("nested created");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+  });
+});
