@@ -9,7 +9,7 @@ import { Text } from "@earendil-works/pi-tui";
 import type { Model } from "@earendil-works/pi-ai";
 import { ConfigStore } from "./config.js";
 import { EntityStore } from "./entity-store.js";
-import { runGatekeeper } from "./gatekeeper.js";
+import { runGatekeeper, type GatekeeperOutcome } from "./gatekeeper.js";
 import { registerManagementTools } from "./management-tools.js";
 import { ShadowRegistry } from "./registry.js";
 import { ReportBatcher, formatReportBatch } from "./report-batcher.js";
@@ -196,19 +196,23 @@ export class ShadowMindRuntime {
     const trajectory = serializeTrajectory(context.messages as unknown as Record<string, unknown>[]);
     const controller = new AbortController();
     this.heartbeatAbort = controller;
-    const outcome = await this.gatekeeper({
-      candidates: selection.candidates,
-      trajectory,
-      config: this.configStore.current,
-      mainModel: ctx.model,
-      mainThinkingLevel: ctx.thinkingLevel,
-      signal: controller.signal,
-      deps: {
-        resolveModel: (id) => resolveModel(ctx, id),
-        modelAuthOk: (model) => ctx.modelRegistry.hasConfiguredAuth(model) || ctx.modelRegistry.isUsingOAuth(model),
-      },
-    });
-    this.heartbeatAbort = undefined;
+    let outcome: GatekeeperOutcome;
+    try {
+      outcome = await this.gatekeeper({
+        candidates: selection.candidates,
+        trajectory,
+        config: this.configStore.current,
+        mainModel: ctx.model,
+        mainThinkingLevel: ctx.thinkingLevel,
+        signal: controller.signal,
+        deps: {
+          resolveModel: (id) => resolveModel(ctx, id),
+          modelAuthOk: (model) => ctx.modelRegistry.hasConfiguredAuth(model) || ctx.modelRegistry.isUsingOAuth(model),
+        },
+      });
+    } finally {
+      this.heartbeatAbort = undefined;
+    }
     if (heartbeatEpoch !== this.heartbeatEpoch) {
       this.record("heartbeat-skipped", { reason: "stale-heartbeat", modelCalls: this.modelCalls });
       return;
@@ -226,6 +230,7 @@ export class ShadowMindRuntime {
       candidates: selection.candidates.map((shadow) => shadow.id),
       ...(outcome.truncated ? { truncated: true } : {}),
       ...(selection.modelFiltered.length ? { modelFiltered: selection.modelFiltered } : {}),
+      ...(selection.runningExcluded.length ? { runningExcluded: selection.runningExcluded } : {}),
     });
     if (!activated.length) return;
 

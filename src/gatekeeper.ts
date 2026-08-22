@@ -150,9 +150,9 @@ export async function runGatekeeper(options: RunGatekeeperOptions): Promise<Gate
   if (options.signal) signals.push(options.signal);
   let message: AssistantMessage;
   try {
-  // pi-agent-core's ThinkingLevel adds "off", which pi-ai's reasoning option
-  // does not accept; "off" maps to no reasoning request.
-  const reasoning = thinkingLevel === "off" ? undefined : (thinkingLevel as AiThinkingLevel);
+    // pi-agent-core's ThinkingLevel adds "off", which pi-ai's reasoning option
+    // does not accept; "off" maps to no reasoning request.
+    const reasoning = thinkingLevel === "off" ? undefined : (thinkingLevel as AiThinkingLevel);
     message = await deps.complete(
       model,
       { systemPrompt, messages: [{ role: "user", content: userMessage, timestamp: Date.now() }] },

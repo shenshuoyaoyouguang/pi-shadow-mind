@@ -364,18 +364,29 @@ describe("ShadowMindRuntime concurrency", () => {
     const calls: Array<Record<string, unknown>> = [];
     const gatekeeper = async (options: { candidates: readonly { id: string }[]; trajectory: string; signal?: AbortSignal }) => {
       calls.push(options as unknown as Record<string, unknown>);
-      return { ok: true as const, activations: [{ id: "alpha", brief: "check scheduler" }] };
+      return calls.length === 1
+        ? { ok: true as const, activations: [{ id: "alpha", brief: "check scheduler" }] }
+        : { ok: true as const, activations: [] };
     };
-    const { pi, ctx } = await boot({ shadows: ["alpha"], gatekeeper });
+    const { pi, ctx } = await boot({ shadows: ["alpha", "beta"], gatekeeper });
     await fireTurnEnd(pi, ctx);
     await waitFor(() => harness.sessions.length === 1);
     expect(calls).toHaveLength(1);
-    expect((calls[0]!.candidates as Array<{ id: string }>).map((shadow) => shadow.id)).toEqual(["alpha"]);
+    expect((calls[0]!.candidates as Array<{ id: string }>).map((shadow) => shadow.id)).toEqual(["alpha", "beta"]);
     expect(typeof calls[0]!.trajectory).toBe("string");
     expect(calls[0]!.signal).toBeInstanceOf(AbortSignal);
     expect(harness.sessions[0]!.prompts[0]).toContain("唤醒理由（供参考）：check scheduler");
     const decision = pi.events.find((event) => event.kind === "gatekeeper-decision");
-    expect(decision?.data).toMatchObject({ activated: [{ id: "alpha", brief: "check scheduler" }], candidates: ["alpha"] });
+    expect(decision?.data).toMatchObject({ activated: [{ id: "alpha", brief: "check scheduler" }], candidates: ["alpha", "beta"] });
+
+    // Second heartbeat while alpha is still running: beta stays a candidate,
+    // alpha is reported as running-excluded in the decision event.
+    await fireTurnEnd(pi, ctx);
+    await waitFor(() => calls.length === 2);
+    expect((calls[1]!.candidates as Array<{ id: string }>).map((shadow) => shadow.id)).toEqual(["beta"]);
+    const decisions = pi.events.filter((event) => event.kind === "gatekeeper-decision");
+    expect(decisions[1]?.data).toMatchObject({ activated: [], candidates: ["beta"], runningExcluded: ["alpha"] });
+    expect(harness.sessions).toHaveLength(1);
   });
 
   it("skips the gatekeeper when no candidates survive the prefilter", async () => {
