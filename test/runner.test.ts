@@ -278,6 +278,17 @@ describe("ShadowRunner.run integration", () => {
     expect(result.error).toMatch(/exceeds test\/model context window \(100000\)/);
   });
 
+  it("classifies a non-ASCII system prompt with the same 1-token-per-char weighting", async () => {
+    const runner = new ShadowRunner();
+    // 300k CJK chars ≈ 300k tokens by weighting, but only 75k as ASCII chars/4.
+    const result = await runner.run(makeRequest({
+      mainSystemPrompt: "测".repeat(300000),
+      messages: [],
+    }));
+    expect(result.reason).toBe("error");
+    expect(result.error).toMatch(/exceeds test\/model context window \(100000\)/);
+  });
+
   it("treats an empty report as silence instead of delivering it", async () => {
     const runner = new ShadowRunner();
     const onReport = vi.fn();

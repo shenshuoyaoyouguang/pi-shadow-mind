@@ -154,6 +154,30 @@ describe("management-tools persistence defects", () => {
     });
   });
 
+  it("sanitizedError redacts unquoted Windows paths that contain spaces", async () => {
+    const winStore: any = {
+      create: async () => {
+        throw new Error("EACCES: permission denied, open C:\\agent dir\\shadow-minds\\dup.md");
+      },
+      list: async () => [],
+      update: async () => {},
+      setEnabled: async () => {},
+      delete: async () => {},
+      readConfig: async () => "",
+      writeConfig: async () => {},
+    };
+    const tools = collectTools(winStore, () => ({} as any));
+    const create = tools.get("create_shadow")!;
+    await expect(create.execute("id", { id: "myid", prompt: "hello" } as any, undefined, undefined, mockCtx())).rejects.toSatisfy((e: unknown) => {
+      const msg = e instanceof Error ? e.message : String(e);
+      expect(msg).toContain("<path>");
+      expect(msg).not.toContain("agent dir");
+      expect(msg).not.toContain("dup.md");
+      expect(msg).toContain("EACCES");
+      return true;
+    });
+  });
+
   it("sanitizedError redacts Windows backslash paths", async () => {
     const winStore: any = {
       create: async () => {

@@ -97,6 +97,26 @@ describe("ReportBatcher", () => {
     expect(order).toEqual(["one", "two", "three"]); // old behavior: ["one", "two,three"]
   });
 
+  it("clear() cancels queued flush snapshots and counts them as dropped", async () => {
+    const delivered: string[][] = [];
+    let releaseFirst!: () => void;
+    const gate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const batcher = new ReportBatcher(50, async (reports) => {
+      delivered.push(reports.map(({ content }) => content));
+      if (delivered.length === 1) await gate;
+    });
+    batcher.add(report("one", "1"));
+    const first = batcher.flush(); // in flight, blocked on the gate
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    batcher.add(report("two", "2"));
+    const second = batcher.flush(); // queued snapshot [two], no longer in the buffer
+    expect(batcher.clear()).toBe(1); // the queued snapshot is cancelled and counted
+    releaseFirst!();
+    await Promise.all([first, second]);
+    expect(delivered).toEqual([["one"]]); // two never reaches deliver
+    expect(batcher.hasPending).toBe(false);
+  });
+
   it("clear() drops pending reports and returns the dropped count", async () => {
     const batcher = new ReportBatcher(100, () => {});
     expect(batcher.clear()).toBe(0);

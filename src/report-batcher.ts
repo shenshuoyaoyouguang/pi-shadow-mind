@@ -1,10 +1,18 @@
 import type { ShadowReport } from "./types.js";
 
+/** A snapshot enqueued by flush(); clear() can still cancel it before delivery starts. */
+interface PendingBatch {
+  reports: ShadowReport[];
+  dropped: boolean;
+  started: boolean;
+}
+
 export class ReportBatcher {
   private reports: ShadowReport[] = [];
   private timer?: ReturnType<typeof setTimeout>;
   private deliveries = 0;
   private queue: Promise<void> = Promise.resolve();
+  private readonly pending = new Set<PendingBatch>();
 
   constructor(private windowMs: number, private readonly deliver: (reports: ShadowReport[]) => void | Promise<void>) {}
 
@@ -36,16 +44,20 @@ export class ReportBatcher {
     const batch = this.reports;
     this.reports = [];
     if (!batch.length) return this.queue;
+    const box: PendingBatch = { reports: batch, dropped: false, started: false };
+    this.pending.add(box);
     this.deliveries += 1;
-    const run = this.queue.then(() => this.deliverBatch(batch));
+    const run = this.queue.then(() => this.deliverBatch(box));
     this.queue = run.catch(() => {});
     return run;
   }
 
-  private async deliverBatch(batch: ShadowReport[]): Promise<void> {
+  private async deliverBatch(box: PendingBatch): Promise<void> {
+    box.started = true;
     try {
-      await this.deliver(batch);
+      if (!box.dropped) await this.deliver(box.reports);
     } finally {
+      this.pending.delete(box);
       this.deliveries -= 1;
     }
   }
@@ -57,8 +69,18 @@ export class ReportBatcher {
   clear(): number {
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
-    const dropped = this.reports.length;
+    let dropped = this.reports.length;
     this.reports = [];
+    // Queued-but-unstarted snapshots are still pending reports: cancel them
+    // and count them so callers do not under-report what was thrown away.
+    // Batches already inside deliver() cannot be recalled here; the runtime's
+    // epoch filtering drops those at send time.
+    for (const box of this.pending) {
+      if (box.started) continue;
+      box.dropped = true;
+      dropped += box.reports.length;
+    }
+    this.pending.clear();
     return dropped;
   }
 }

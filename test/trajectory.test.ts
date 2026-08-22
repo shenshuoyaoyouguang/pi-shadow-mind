@@ -30,7 +30,7 @@ describe("serializeTrajectory", () => {
       report("fresh four"),
       report("fresh five"),
     ]);
-    expect(result).toContain("(2 older reports omitted)");
+    expect(result).toContain("(2 reports omitted)");
     expect(result).toContain("SHADOW FEEDBACK: fresh three");
     expect(result).toContain("SHADOW FEEDBACK: fresh four");
     expect(result).toContain("SHADOW FEEDBACK: fresh five");
@@ -43,7 +43,7 @@ describe("serializeTrajectory", () => {
       report("x".repeat(4000)),
       report("recent"),
     ]);
-    expect(result).toContain("(1 older report omitted)");
+    expect(result).toContain("(1 report omitted)");
     expect(result).toContain("SHADOW FEEDBACK: recent");
     expect(result).not.toContain("xxxx");
   });
@@ -61,7 +61,7 @@ describe("serializeTrajectory", () => {
     const result = serializeTrajectory([report(older), report(oversized)]);
     expect(result).toContain("fitting older report");
     expect(result).not.toContain(oversized);
-    expect(result).toContain("(1 older report omitted)");
+    expect(result).toContain("(1 report omitted)");
   });
 
   it("flattens newlines inside a message into single labeled lines", () => {

@@ -21,6 +21,13 @@ describe("summarizeToolResult", () => {
     expect(Array.from(preview).every((char) => char === "x" || char === "𝄞" || char === "…")).toBe(true);
   });
 
+  it("does not add a false ellipsis when astral text fits in code points", () => {
+    // 150 code points but 300 UTF-16 units: nothing is cut, so no ellipsis.
+    const text = "𝄞".repeat(150);
+    const summary = summarizeToolResult({ toolName: "read", content: [{ type: "text", text }], isError: false });
+    expect(summary).toBe(`1 read · ${text}`);
+  });
+
   it("keeps zero-line handling for empty read results", () => {
     const summary = summarizeToolResult({ toolName: "read", content: [{ type: "text", text: "" }], isError: false });
     expect(summary).toBe("0 read");

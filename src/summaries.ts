@@ -60,8 +60,11 @@ const PREVIEW_MAX_CHARS = 200;
 
 function compact(value: string): string {
   const collapsed = value.replace(/\s+/g, " ").trim();
+  // Fast path: short in UTF-16 units is always short in code points.
   if (collapsed.length <= PREVIEW_MAX_CHARS) return collapsed;
-  // Slice by code points: a UTF-16 cut would split an astral character's
-  // surrogate pair and feed a lone surrogate into the trajectory prompt.
-  return `${Array.from(collapsed).slice(0, PREVIEW_MAX_CHARS).join("")}…`;
+  // Guard and cap by code points alike: astral-heavy text whose units exceed
+  // the cap may still have ≤200 code points — nothing is cut, so no ellipsis.
+  const chars = Array.from(collapsed);
+  if (chars.length <= PREVIEW_MAX_CHARS) return collapsed;
+  return `${chars.slice(0, PREVIEW_MAX_CHARS).join("")}…`;
 }

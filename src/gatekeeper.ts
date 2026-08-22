@@ -82,10 +82,20 @@ export function fitTrajectory(trajectory: string, contextWindowChars: number, re
   let headChars = headLines.join("\n").length;
   if (headChars > budget) {
     // Even the head alone exceeds the window (e.g. tiny context model plus a
-    // large candidate list): cap it by code points so the gatekeeper still
-    // receives the start of the original task intent and the output stays
-    // within budget instead of failing the model call.
-    const capped = `${Array.from(headLines.join("\n")).slice(0, Math.max(1, budget - 1)).join("")}…`;
+    // large candidate list): cap it so the gatekeeper still receives the start
+    // of the original task intent and the output stays within budget instead
+    // of failing the model call. The budget is UTF-16 units; take whole code
+    // points and reserve one unit for the ellipsis so capped.length <= budget
+    // holds for astral-heavy heads too.
+    const headText = headLines.join("\n");
+    const kept: string[] = [];
+    let units = 0;
+    for (const char of Array.from(headText)) {
+      if (units + char.length > budget - 1) break;
+      kept.push(char);
+      units += char.length;
+    }
+    const capped = `${kept.join("")}…`;
     headLines.length = 0;
     headLines.push(capped);
     headChars = capped.length;

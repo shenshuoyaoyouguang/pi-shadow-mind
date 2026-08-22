@@ -160,6 +160,53 @@ describe("atomicWriteFile", () => {
       },
     );
 
+    it.skipIf(!symlinkSupported)(
+      "resolves a symlink chain exactly 40 links deep (at the hop cap)",
+      async () => {
+        const dir = await makeDir();
+        try {
+          const targetPath = join(dir, "real.txt");
+          await writeFile(targetPath, "original", "utf8");
+          let previous = targetPath;
+          for (let index = 0; index < 40; index += 1) {
+            const linkPath = join(dir, `l${index}.txt`);
+            await symlink(previous, linkPath);
+            previous = linkPath;
+          }
+          await atomicWriteFile(previous, "deep update", { overwrite: true });
+          expect(await readFile(targetPath, "utf8")).toBe("deep update");
+        } finally {
+          await rm(dir, { recursive: true, force: true });
+        }
+      },
+    );
+
+    it.skipIf(!symlinkSupported)(
+      "resolves relative .. hops against the physical parent, not a symlinked alias",
+      async () => {
+        const dir = await makeDir();
+        try {
+          await mkdir(join(dir, "b", "real"), { recursive: true });
+          await mkdir(join(dir, "b", "shared"), { recursive: true });
+          const targetPath = join(dir, "b", "shared", "g.md");
+          await writeFile(targetPath, "original", "utf8");
+          // dir/a-alias is a directory alias for dir/b/real; link.md uses a
+          // relative .. hop. The kernel resolves ../shared against b/real, so
+          // the physical parent must be used — not the a-alias lexical path.
+          await symlink(join(dir, "b", "real"), join(dir, "a-alias"));
+          await symlink("../shared/g.md", join(dir, "b", "real", "link.md"));
+
+          await atomicWriteFile(join(dir, "a-alias", "link.md"), "updated via alias", { overwrite: true });
+
+          expect(await readFile(targetPath, "utf8")).toBe("updated via alias");
+          const rootEntries = await readdir(dir);
+          expect(rootEntries).not.toContain("shared"); // no stray lexical tree
+        } finally {
+          await rm(dir, { recursive: true, force: true });
+        }
+      },
+    );
+
     it("cleans up the staged tmp file when the overwrite rename fails", async () => {
       const { rename } = await import("node:fs/promises");
       const renameMock = rename as unknown as { mockRejectedValueOnce: (value: unknown) => void };

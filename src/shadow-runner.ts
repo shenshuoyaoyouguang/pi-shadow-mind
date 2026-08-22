@@ -358,11 +358,13 @@ export function resolveRunThinkingLevel(model: Model<any>, request: ShadowRunReq
  * margin covers the rest.
  */
 function assertTrajectoryFits(model: Model<any>, systemPrompt: string, requestText: string): void {
-  let ascii = systemPrompt.length;
+  let ascii = 0;
   let nonAscii = 0;
-  for (let index = 0; index < requestText.length; index += 1) {
-    if (requestText.charCodeAt(index) > 0x7f) nonAscii += 1;
-    else ascii += 1;
+  for (const text of [systemPrompt, requestText]) {
+    for (let index = 0; index < text.length; index += 1) {
+      if (text.charCodeAt(index) > 0x7f) nonAscii += 1;
+      else ascii += 1;
+    }
   }
   const estimated = Math.ceil((ascii / 4 + nonAscii) * 1.1);
   if (estimated > model.contextWindow) {

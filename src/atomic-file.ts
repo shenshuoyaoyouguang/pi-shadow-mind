@@ -1,4 +1,4 @@
-import { copyFile, link, lstat, mkdir, open, readlink, rename, unlink, writeFile } from "node:fs/promises";
+import { copyFile, link, lstat, mkdir, open, readlink, realpath, rename, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 /**
@@ -33,14 +33,18 @@ export async function atomicWriteFile(filePath: string, data: string, options: {
   }
 }
 
+const MAX_SYMLINK_HOPS = 40;
+
 /**
- * Follow the complete symlink chain (capped like the OS ELOOP limit) so an
- * overwrite publishes to the final target instead of replacing an intermediate
- * link. A dangling chain resolves to its missing last hop and writes there.
+ * Follow the complete symlink chain so an overwrite publishes to the final
+ * target instead of replacing an intermediate link. A dangling chain resolves
+ * to its missing last hop and writes there. The hop cap is a cycle safety
+ * valve, deliberately above the OS ELOOP limits (Linux 40, macOS 32) — every
+ * hop is checked, so chains at or under the cap always resolve.
  */
 async function resolveOverwriteTarget(filePath: string): Promise<string> {
   let current = filePath;
-  for (let hops = 0; hops < 40; hops += 1) {
+  for (let hops = 0; ; hops += 1) {
     let entry: Awaited<ReturnType<typeof lstat>>;
     try {
       entry = await lstat(current);
@@ -49,10 +53,17 @@ async function resolveOverwriteTarget(filePath: string): Promise<string> {
       throw error;
     }
     if (!entry.isSymbolicLink()) return current;
+    if (hops >= MAX_SYMLINK_HOPS) throw new Error(`symlink chain too deep: ${filePath}`);
     const linkedPath = await readlink(current);
-    current = isAbsolute(linkedPath) ? linkedPath : resolve(dirname(current), linkedPath);
+    if (isAbsolute(linkedPath)) {
+      current = linkedPath;
+    } else {
+      // The kernel resolves `..` hops against the physical parent, not the
+      // lexical alias the chain may have been entered through.
+      const physicalParent = await realpath(dirname(current));
+      current = resolve(physicalParent, linkedPath);
+    }
   }
-  throw new Error(`symlink chain too deep: ${filePath}`);
 }
 
 /**

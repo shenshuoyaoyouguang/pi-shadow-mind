@@ -173,10 +173,13 @@ function sanitizedError(error: unknown): Error {
   const raw = error instanceof Error ? error.message : String(error);
   // Keep the first line only: Node fs errors are single-line, and stack traces
   // or diagnostics must never reach the model. Quoted paths are redacted whole
-  // (they may contain spaces — Windows, UNC, POSIX), then bare path tokens.
+  // (they may contain spaces — Windows, UNC, POSIX). Unquoted drive/UNC paths
+  // have no reliable terminator, so the rest of the line is redacted with them
+  // (over-redaction beats leaking); bare POSIX tokens stay space-delimited.
   const firstLine = raw.split("\n")[0];
   const cleaned = firstLine
     .replace(/'[^']*'|"[^"]*"/g, (token) => (/^['"][A-Za-z]:\\|^['"]\\\\|^['"]\//.test(token) ? "<path>" : token))
-    .replace(/(^|[\s(])(?:[A-Za-z]:\\|\\\\|\/)[^\s'")]*/g, "$1<path>");
+    .replace(/(?:[A-Za-z]:\\|\\\\)[^\n]*/g, "<path>")
+    .replace(/(^|[\s(])\/[^\s'")]*/g, "$1<path>");
   return new Error(cleaned);
 }

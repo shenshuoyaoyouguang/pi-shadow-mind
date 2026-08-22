@@ -102,6 +102,15 @@ describe("fitTrajectory", () => {
     expect(result.text).toContain("USER: task"); // start of the task intent survives
     expect(result.text).not.toContain("TOOL: read(x)"); // no room left for a tail
   });
+
+  it("caps an astral-heavy head within the UTF-16 budget", () => {
+    // Each 𝄞 is 2 UTF-16 units: code-point slicing could overshoot the budget.
+    const trajectory = `<main-agent-trajectory>\nUSER: ${"𝄞".repeat(100)}`;
+    const result = fitTrajectory(trajectory, 40);
+    expect(result.truncated).toBe(true);
+    expect(result.text.length).toBeLessThanOrEqual(40 + "[...earlier trajectory omitted...]".length + 2);
+    expect(result.text.startsWith("<main-agent-trajectory>\nUSER: ")).toBe(true);
+  });
 });
 
 describe("buildGatekeeperPrompt", () => {

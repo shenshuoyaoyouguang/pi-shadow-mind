@@ -68,7 +68,8 @@ export function serializeTrajectory(messages: readonly MessageLike[]): string {
         lines.push(`SHADOW FEEDBACK: ${text}`);
       } else if (!omittedMarked) {
         const omitted = feedbackTexts.length - keptFeedback.size;
-        lines.push(`SHADOW FEEDBACK: (${omitted} older report${omitted === 1 ? "" : "s"} omitted)`);
+        // Neutral wording: an oversized newest report can be the omitted one.
+        lines.push(`SHADOW FEEDBACK: (${omitted} report${omitted === 1 ? "" : "s"} omitted)`);
         omittedMarked = true;
       }
       continue;
