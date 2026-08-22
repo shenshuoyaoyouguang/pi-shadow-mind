@@ -9,13 +9,14 @@ import { Text } from "@earendil-works/pi-tui";
 import type { Model } from "@earendil-works/pi-ai";
 import { ConfigStore } from "./config.js";
 import { EntityStore } from "./entity-store.js";
+import { runGatekeeper } from "./gatekeeper.js";
 import { registerManagementTools } from "./management-tools.js";
 import { ShadowRegistry } from "./registry.js";
 import { ReportBatcher, formatReportBatch } from "./report-batcher.js";
-import { createRandom } from "./random.js";
-import { decideHeartbeat, shouldEvaluateHeartbeat } from "./scheduler.js";
+import { selectCandidates, shouldEvaluateHeartbeat } from "./scheduler.js";
 import { SessionLifetime } from "./session-lifetime.js";
 import { ShadowRunner, resolveShadowTools, type ShadowRunResult } from "./shadow-runner.js";
+import { serializeTrajectory } from "./trajectory.js";
 import { waitForSettled } from "./shutdown-drain.js";
 import type { RuntimeEvent, ShadowDefinition, ShadowReport } from "./types.js";
 
@@ -30,6 +31,7 @@ export class ShadowMindRuntime {
   private readonly active = new Map<string, { shadow: ShadowDefinition; epoch: number }>();
   private readonly watchdogs = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly recentEvents: RuntimeEvent[] = [];
+  private readonly gatekeeper: typeof runGatekeeper;
   private readonly batcher: ReportBatcher;
   private readonly sessionLifetime = new SessionLifetime();
   private heartbeatChain: Promise<void> = Promise.resolve();
@@ -41,9 +43,11 @@ export class ShadowMindRuntime {
   private latestContext?: ExtensionContext;
   private diagnostics: string[] = [];
   private shadowCount = 0;
-  private random: () => number = Math.random;
+  /** Aborts the in-flight gatekeeper call when new user input invalidates the heartbeat. */
+  private heartbeatAbort?: AbortController;
 
-  constructor(private readonly pi: ExtensionAPI, private readonly options: { abortGraceMs?: number } = {}) {
+  constructor(private readonly pi: ExtensionAPI, private readonly options: { abortGraceMs?: number; gatekeeper?: typeof runGatekeeper } = {}) {
+    this.gatekeeper = options.gatekeeper ?? runGatekeeper;
     this.batcher = new ReportBatcher(this.configStore.current.resultBatchWindowMs, (reports) => this.deliverReports(reports));
   }
 
@@ -59,16 +63,15 @@ export class ShadowMindRuntime {
       this.latestContext = ctx;
       this.modelCalls = 0;
       await this.configStore.initialize();
-      this.random = createRandom(this.configStore.current.randomSeed);
       await this.registry.initialize();
       await this.refresh(ctx);
-      this.record("session-config", { randomSeed: this.configStore.current.randomSeed ?? "random" });
       this.updateStatus(ctx);
     });
 
     this.pi.on("input", (event, ctx) => {
       this.latestContext = ctx;
       if (event.source === "extension") return;
+      this.heartbeatAbort?.abort();
       this.heartbeatEpoch += 1;
       this.epoch += 1;
       this.abortAll("new-user-input");
@@ -173,33 +176,67 @@ export class ShadowMindRuntime {
     }
     const snapshot = await this.registry.load();
     const fullModelId = `${ctx.model.provider}/${ctx.model.id}`;
-    const decision = decideHeartbeat({
-      heartbeatProbability: this.configStore.current.heartbeatProbability,
-      availableSlots: Math.max(0, this.configStore.current.maxParallelShadows - this.active.size),
+    const availableSlots = Math.max(0, this.configStore.current.maxParallelShadows - this.active.size);
+    if (availableSlots <= 0) {
+      this.record("heartbeat-skipped", { reason: "no-slots", modelCalls: this.modelCalls });
+      return;
+    }
+    // Deterministic prefilter; the gatekeeper only ever sees shadows it could actually launch.
+    const selection = selectCandidates({
       shadows: snapshot.shadows,
       activeShadowIds: new Set([...this.active.values()].map(({ shadow }) => shadow.id)),
       mainModelId: fullModelId,
-      random: this.random,
     });
-    this.record("heartbeat", {
-      modelCalls: this.modelCalls,
-      roll: decision.heartbeatRoll,
-      candidates: decision.candidates,
-      activated: decision.activated.map(({ shadow, roll }) => ({ id: shadow.id, roll })),
-      ...(decision.modelFiltered.length ? { modelFiltered: decision.modelFiltered } : {}),
-      ...(decision.runningExcluded.length ? { runningExcluded: decision.runningExcluded } : {}),
-    });
-    if (!decision.activated.length) return;
+    if (!selection.candidates.length) {
+      this.record("heartbeat-skipped", { reason: "no-candidates", modelCalls: this.modelCalls, ...(selection.modelFiltered.length ? { modelFiltered: selection.modelFiltered } : {}) });
+      return;
+    }
 
     const context = buildSessionContext(ctx.sessionManager.getEntries(), ctx.sessionManager.getLeafId());
+    const trajectory = serializeTrajectory(context.messages as unknown as Record<string, unknown>[]);
+    const controller = new AbortController();
+    this.heartbeatAbort = controller;
+    const outcome = await this.gatekeeper({
+      candidates: selection.candidates,
+      trajectory,
+      config: this.configStore.current,
+      mainModel: ctx.model,
+      mainThinkingLevel: ctx.thinkingLevel,
+      signal: controller.signal,
+      deps: {
+        resolveModel: (id) => resolveModel(ctx, id),
+        modelAuthOk: (model) => ctx.modelRegistry.hasConfiguredAuth(model) || ctx.modelRegistry.isUsingOAuth(model),
+      },
+    });
+    this.heartbeatAbort = undefined;
+    if (heartbeatEpoch !== this.heartbeatEpoch) {
+      this.record("heartbeat-skipped", { reason: "stale-heartbeat", modelCalls: this.modelCalls });
+      return;
+    }
+    if (!outcome.ok) {
+      // Fail-closed: a broken gatekeeper must never fall back to blind scheduling.
+      this.record("gatekeeper-error", { error: outcome.error });
+      return;
+    }
+    const activated = outcome.activations.slice(0, availableSlots)
+      .map((activation) => ({ shadow: snapshot.shadows.find((shadow) => shadow.id === activation.id), brief: activation.brief }))
+      .filter((entry): entry is { shadow: ShadowDefinition; brief: string } => Boolean(entry.shadow));
+    this.record("gatekeeper-decision", {
+      activated: activated.map(({ shadow, brief }) => ({ id: shadow.id, brief })),
+      candidates: selection.candidates.map((shadow) => shadow.id),
+      ...(outcome.truncated ? { truncated: true } : {}),
+      ...(selection.modelFiltered.length ? { modelFiltered: selection.modelFiltered } : {}),
+    });
+    if (!activated.length) return;
+
     const availableTools = new Set(this.pi.getAllTools().map((tool) => tool.name));
-    for (const { shadow } of decision.activated) {
+    for (const { shadow, brief } of activated) {
       if (this.paused || heartbeatEpoch !== this.heartbeatEpoch) break;
-      this.launchShadow(ctx, shadow, ctx.model, fullModelId, context, availableTools);
+      this.launchShadow(ctx, shadow, ctx.model, fullModelId, context, availableTools, brief);
     }
   }
 
-  private launchShadow(ctx: ExtensionContext, shadow: ShadowDefinition, mainModel: Model<any>, fullModelId: string, context: ReturnType<typeof buildSessionContext>, availableTools: Set<string>): void {
+  private launchShadow(ctx: ExtensionContext, shadow: ShadowDefinition, mainModel: Model<any>, fullModelId: string, context: ReturnType<typeof buildSessionContext>, availableTools: Set<string>, brief?: string): void {
     const runId = randomUUID();
     const runEpoch = this.epoch;
     const { tools, missing } = resolveShadowTools(shadow.tools, availableTools);
@@ -225,6 +262,7 @@ export class ShadowMindRuntime {
       resolveModel: (id) => resolveModel(ctx, id),
       modelAuthOk: (model) => ctx.modelRegistry.hasConfiguredAuth(model) || ctx.modelRegistry.isUsingOAuth(model),
       mainThinkingLevel: ctx.thinkingLevel,
+      brief,
       onReport: (report) => this.acceptReport(report),
     }).then((result) => this.handleRunEnd(runId, shadow, result)).catch((error) => {
       this.releaseWatchdog(runId);
@@ -381,14 +419,16 @@ export class ShadowMindRuntime {
   }
 
   private hasRecentRunErrors(): boolean {
-    return this.recentEvents.slice(-3).some((event) => event.kind === "run-end" && (event.data?.reason === "error" || event.data?.reason === "timeout"));
+    return this.recentEvents.slice(-3).some((event) =>
+      event.kind === "gatekeeper-error"
+      || (event.kind === "run-end" && (event.data?.reason === "error" || event.data?.reason === "timeout")));
   }
 
   private statusLines(): string[] {
     const config = this.configStore.current;
     return [
       `🐙 Shadow Mind · ${this.paused ? "paused" : "active"} · running ${this.active.size}/${config.maxParallelShadows}`,
-      `heartbeat ${formatNumber(config.heartbeatProbability)} · batch ${config.resultBatchWindowMs}ms · timeout ${config.defaultShadowTimeoutSeconds}s · drain ${config.headlessDrainTimeoutSeconds}s · thinking ${config.defaultThinkingLevel}`,
+      `gatekeeper ${config.gatekeeperModel ?? config.defaultShadowModel ?? "main model"} · batch ${config.resultBatchWindowMs}ms · timeout ${config.defaultShadowTimeoutSeconds}s · drain ${config.headlessDrainTimeoutSeconds}s · thinking ${config.defaultThinkingLevel}`,
       `definitions: ${this.shadowCount} valid · ${this.diagnostics.length} invalid`,
       ...this.recentEvents.slice(-5).map((event) => {
         const failed = event.kind === "run-end" && (event.data?.reason === "error" || event.data?.reason === "timeout");
@@ -404,8 +444,4 @@ function resolveModel(ctx: ExtensionContext, fullId: string) {
   const separator = fullId.indexOf("/");
   if (separator <= 0 || separator === fullId.length - 1) return undefined;
   return ctx.modelRegistry.find(fullId.slice(0, separator), fullId.slice(separator + 1));
-}
-
-function formatNumber(value: number): string {
-  return Number(value.toFixed(3)).toString();
 }

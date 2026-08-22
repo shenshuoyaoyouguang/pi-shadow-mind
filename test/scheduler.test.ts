@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decideHeartbeat, matchesModel, selectCandidates, shouldEvaluateHeartbeat } from "../src/scheduler.js";
+import { matchesModel, selectCandidates, shouldEvaluateHeartbeat } from "../src/scheduler.js";
 import type { ShadowDefinition } from "../src/types.js";
 
 const shadow = (id: string, probability = 1): ShadowDefinition => ({
@@ -14,59 +14,6 @@ describe("shouldEvaluateHeartbeat", () => {
 
   it("allows turns that completed Main tool work", () => {
     expect(shouldEvaluateHeartbeat([{ toolName: "read" }])).toBe(true);
-  });
-});
-
-describe("decideHeartbeat", () => {
-  it("rolls independently and caps selected shadows", () => {
-    const rolls = [0.1, 0.1, 0.2, 0.3, 0.8, 0.4];
-    const result = decideHeartbeat({
-      heartbeatProbability: 1 / 3,
-      availableSlots: 2,
-      shadows: [shadow("a"), shadow("b"), shadow("c")],
-      activeShadowIds: new Set(),
-      mainModelId: "openai/gpt",
-      random: () => rolls.shift() ?? 0,
-    });
-    expect(result.activated).toHaveLength(2);
-    expect(result.candidates).toHaveLength(3);
-  });
-
-  it("does nothing when heartbeat misses", () => {
-    const result = decideHeartbeat({ heartbeatProbability: 0.3, availableSlots: 2, shadows: [shadow("a")], activeShadowIds: new Set(), mainModelId: "openai/gpt", random: () => 0.5 });
-    expect(result.activated).toEqual([]);
-  });
-
-  it("reports running-excluded and model-filtered shadows", () => {
-    const result = decideHeartbeat({
-      heartbeatProbability: 1,
-      availableSlots: 2,
-      shadows: [shadow("a"), shadow("b")],
-      activeShadowIds: new Set(["a"]),
-      mainModelId: "other/model",
-      random: () => 0.1,
-    });
-    expect(result.runningExcluded).toEqual(["a"]);
-    expect(result.modelFiltered).toEqual(["b"]);
-    expect(result.activated).toEqual([]);
-    expect(result.candidates).toEqual([]);
-  });
-
-  it("does not consume shuffle randoms when hits fit the available slots", () => {
-    let calls = 0;
-    const result = decideHeartbeat({
-      heartbeatProbability: 1,
-      availableSlots: 2,
-      shadows: [shadow("a"), shadow("b")],
-      activeShadowIds: new Set(),
-      mainModelId: "openai/gpt",
-      random: () => {
-        calls += 1;
-        return 0.1;
-      },
-    });
-    expect(result.activated.map(({ shadow }) => shadow.id)).toEqual(["a", "b"]);
-    expect(calls).toBe(3);
   });
 });
 

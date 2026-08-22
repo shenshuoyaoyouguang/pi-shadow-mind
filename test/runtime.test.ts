@@ -6,6 +6,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import type { Model } from "@earendil-works/pi-ai";
 import { ShadowRunner, type ShadowRunRequest } from "../src/shadow-runner.js";
 import { ShadowMindRuntime } from "../src/runtime.js";
+import type { runGatekeeper } from "../src/gatekeeper.js";
 
 // ---------------------------------------------------------------------------
 // Mock only the Pi boundary: getAgentDir points the runtime at a temp agent
@@ -19,13 +20,16 @@ const harness = vi.hoisted(() => {
     // Mirror the real AgentSession shape: production reads messages (base
     // count, own-message metrics) and sessionFile.
     messages: Record<string, unknown>[] = [];
+    /** Prompt texts delivered to this session, for asserting request content. */
+    prompts: string[] = [];
     sessionFile = "/tmp/fake-shadow-session.jsonl";
     behavior: "silent" | "hang" = "silent";
     constructor(readonly options: Record<string, unknown>) {}
     getActiveToolNames(): string[] {
       return ((this.options.tools as string[] | undefined) ?? []).filter((name) => !name.startsWith("missing-"));
     }
-    async prompt(): Promise<void> {
+    async prompt(text?: string): Promise<void> {
+      this.prompts.push(text ?? "");
       if (this.behavior === "hang") await new Promise<void>(() => {});
     }
     async waitForIdle(): Promise<void> {}
@@ -173,11 +177,22 @@ function writeShadow(id: string): void {
   writeFileSync(join(dir, `${id}.md`), `---\nid: ${id}\nname: ${id}\nactivation_probability: 1\ntools: []\n---\nPrompt body for ${id}.\n`);
 }
 
-async function boot(options: { config?: Record<string, number>; shadows?: string[]; abortGraceMs?: number; failingEntryKinds?: string[] } = {}) {
+/** Default test gatekeeper: activate every candidate, mirroring the old probability=1 behavior. */
+function defaultTestGatekeeper(options: { candidates: readonly { id: string }[] }): Promise<{ ok: true; activations: Array<{ id: string; brief: string }> }> {
+  return Promise.resolve({
+    ok: true,
+    activations: options.candidates.map((shadow) => ({ id: shadow.id, brief: "" })),
+  });
+}
+
+async function boot(options: { config?: Record<string, number>; shadows?: string[]; abortGraceMs?: number; failingEntryKinds?: string[]; gatekeeper?: typeof runGatekeeper } = {}) {
   writeConfig(options.config);
   for (const id of options.shadows ?? []) writeShadow(id);
   const pi = makePi(options.failingEntryKinds);
-  const runtime = new ShadowMindRuntime(pi.api, options.abortGraceMs === undefined ? {} : { abortGraceMs: options.abortGraceMs });
+  const runtimeOptions: { abortGraceMs?: number; gatekeeper?: typeof runGatekeeper } = {};
+  if (options.abortGraceMs !== undefined) runtimeOptions.abortGraceMs = options.abortGraceMs;
+  runtimeOptions.gatekeeper = options.gatekeeper ?? defaultTestGatekeeper;
+  const runtime = new ShadowMindRuntime(pi.api, runtimeOptions);
   runtime.register();
   const ctx = makeCtx(pi);
   await handlerOf(pi, "session_start")({ type: "session_start", reason: "startup" }, ctx);
@@ -342,6 +357,68 @@ describe("ShadowMindRuntime concurrency", () => {
     await Promise.all([first, second]);
     await sleep(40);
 
+    expect(harness.sessions).toHaveLength(0);
+  });
+
+  it("calls the gatekeeper and launches listed shadows with briefs", async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const gatekeeper = async (options: { candidates: readonly { id: string }[]; trajectory: string; signal?: AbortSignal }) => {
+      calls.push(options as unknown as Record<string, unknown>);
+      return { ok: true as const, activations: [{ id: "alpha", brief: "check scheduler" }] };
+    };
+    const { pi, ctx } = await boot({ shadows: ["alpha"], gatekeeper });
+    await fireTurnEnd(pi, ctx);
+    await waitFor(() => harness.sessions.length === 1);
+    expect(calls).toHaveLength(1);
+    expect((calls[0]!.candidates as Array<{ id: string }>).map((shadow) => shadow.id)).toEqual(["alpha"]);
+    expect(typeof calls[0]!.trajectory).toBe("string");
+    expect(calls[0]!.signal).toBeInstanceOf(AbortSignal);
+    expect(harness.sessions[0]!.prompts[0]).toContain("唤醒理由（供参考）：check scheduler");
+    const decision = pi.events.find((event) => event.kind === "gatekeeper-decision");
+    expect(decision?.data).toMatchObject({ activated: [{ id: "alpha", brief: "check scheduler" }], candidates: ["alpha"] });
+  });
+
+  it("skips the gatekeeper when no candidates survive the prefilter", async () => {
+    let called = false;
+    const gatekeeper = async () => {
+      called = true;
+      return { ok: true as const, activations: [] };
+    };
+    const { pi, ctx } = await boot({ gatekeeper });
+    await fireTurnEnd(pi, ctx);
+    await sleep(20);
+    expect(called).toBe(false);
+    expect(pi.events.some((event) => event.kind === "heartbeat-skipped" && event.data?.reason === "no-candidates")).toBe(true);
+    expect(pi.events.some((event) => event.kind === "run-start")).toBe(false);
+  });
+
+  it("fails closed on gatekeeper error and records the event", async () => {
+    const gatekeeper = async () => ({ ok: false as const, activations: [], error: "boom" });
+    const { pi, ctx } = await boot({ shadows: ["alpha"], gatekeeper });
+    await fireTurnEnd(pi, ctx);
+    await sleep(20);
+    const errorEvent = pi.events.find((event) => event.kind === "gatekeeper-error");
+    expect(errorEvent?.data).toMatchObject({ error: "boom" });
+    expect(harness.sessions).toHaveLength(0);
+  });
+
+  it("aborts an in-flight gatekeeper call on new user input", async () => {
+    let aborted = false;
+    let entered = false;
+    const gatekeeper = (options: { signal?: AbortSignal }) => new Promise<{ ok: true; activations: [] }>((_resolve, reject) => {
+      entered = true;
+      options.signal?.addEventListener("abort", () => {
+        aborted = true;
+        reject(new Error("aborted"));
+      });
+    });
+    const { pi, ctx } = await boot({ shadows: ["alpha"], gatekeeper });
+    const pending = fireTurnEnd(pi, ctx);
+    await waitFor(() => entered);
+    fireInput(pi, ctx);
+    await pending;
+    await sleep(10);
+    expect(aborted).toBe(true);
     expect(harness.sessions).toHaveLength(0);
   });
 });

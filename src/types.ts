@@ -59,13 +59,3 @@ export interface RuntimeEvent {
   epoch: number;
   data?: Record<string, unknown>;
 }
-
-export interface HeartbeatDecision {
-  heartbeatRoll: number;
-  activated: Array<{ shadow: ShadowDefinition; roll: number }>;
-  candidates: Array<{ shadowId: string; roll: number; selected: boolean }>;
-  /** Shadow ids excluded because active_for_models did not match the main model. */
-  modelFiltered: string[];
-  /** Shadow ids excluded because the same shadow is already running. */
-  runningExcluded: string[];
-}
