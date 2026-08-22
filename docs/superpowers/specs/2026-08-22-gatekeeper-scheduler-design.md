@@ -39,7 +39,8 @@ turn_end（≥1 次工具结果；纯文本轮仍跳过）
 - 随机抽签整体移除。合格的 `turn_end` 必调门卫（有候选时），由它决定名单，可以为空。
 - 门卫失败**不回退**随机抽签，fail-closed：跳过本轮并记录原因。
 - 并发上限、暂停、epoch 失效、新输入中止等既有防线全部保留，位置不变。
-- Shadow 醒来后保留原有"不相关即退出"自检，作为最后防线。
+- 在途门卫调用挂 AbortSignal：新输入 bump epoch 时立即中止，不在超时窗口内白烧 token（launch 前的 staleness 检查已保证正确性，此处仅止损）。
+- Shadow 醒来后保留原有"不相关即退出"自检，作为最后防线；brief 以中性参考注入（"唤醒理由（供参考）：…"），不作为指令，自检优先于 brief——门卫误报时 Shadow 仍能自行退出。
 
 ## 3. 门卫契约
 
@@ -52,7 +53,7 @@ turn_end（≥1 次工具结果；纯文本轮仍跳过）
 
 职责摘要取 Shadow Markdown 正文的前若干字符（截断到常量 `GATEKEEPER_BRIEF_CHARS`，初值 400），不做额外总结调用。
 
-轨迹超出门卫模型上下文窗口时，从头部截断、保留尾部（最近的工具活动最有信息量），并记入决策事件。不做分块或多次调用。
+轨迹超出门卫模型上下文窗口时，保头+保尾截断：首条 USER 消息（原始任务意图，是相关性判断的最强信号）必保留，剩余预算留给尾部（最近的工具活动），并记入决策事件。不做分块或多次调用。
 
 ### 3.2 输出
 
@@ -71,7 +72,7 @@ turn_end（≥1 次工具结果；纯文本轮仍跳过）
 
 - 模型回退链：`config.gatekeeper_model` → `default_shadow_model` → Main 当前模型。auth 校验与 Shadow 相同；无 auth 视为门卫失败。
 - thinking level：使用插件 `default_thinking_level` 回退链的最简形式（`gatekeeper` 不单独设字段；直接用 `defaultThinkingLevel`，模型不支持该等级时回退 Main 当前等级，复用 `resolveRunThinkingLevel` 的候选逻辑）。
-- 超时：模块常量 `GATEKEEPER_TIMEOUT_MS = 30_000`，不设配置字段。超时即门卫失败。门卫调用串行进入现有 `heartbeatChain`，因此超时会推迟下一轮心跳最多一个周期，可接受。
+- 超时：模块常量 `GATEKEEPER_TIMEOUT_MS = 30_000`，不设配置字段。超时即门卫失败。门卫调用串行进入现有 `heartbeatChain`，因此超时会推迟下一轮心跳最多一个周期，可接受。门卫调用挂 AbortSignal，超时与新输入（epoch 失效）都会中止在途调用。
 
 ### 3.4 调用方式
 
@@ -96,10 +97,11 @@ turn_end（≥1 次工具结果；纯文本轮仍跳过）
 | --- | --- |
 | `src/gatekeeper.ts`（新增） | 门卫的全部逻辑：提示词构建、`completeSimple` 调用、JSON 解析、截断。导出 `runGatekeeper(deps)`，deps 注入 `completeSimple`/`resolveModel`/`modelAuthOk` 以便测试 |
 | `src/scheduler.ts` | 删除 `decideHeartbeat` 与随机采样；保留并复用 `shouldEvaluateHeartbeat`、`matchesModel`；新增候选预筛函数 `selectCandidates(...)`（纯函数） |
-| `src/protocol.ts` | `buildShadowRequest` 增加可选 `brief` 参数，注入 `<shadow-mind>` 块内的一行"本次唤醒理由"；未传时输出与现状完全一致 |
-| `src/runtime.ts` | 只改编排：`runHeartbeat` 中以 预筛→门卫→launch 替换 `decideHeartbeat`；新增门卫事件记录。不新增状态、不分叉流程 |
-| `src/config.ts` / `types.ts` | 新增 `gatekeeper_model` 可选字段；废弃字段保持宽松解析 |
-| 删除 | `decideHeartbeat`、`sample`、调度路径上的 `random` 注入（`createRandom` 若无其他使用者一并删除） |
+| `src/protocol.ts` | `buildShadowRequest` 增加可选 `brief` 参数，以中性参考注入一行"唤醒理由（供参考）：…"；未传时输出与现状完全一致 |
+| `src/runtime.ts` | 只改编排：`runHeartbeat` 中以 预筛→门卫→launch 替换 `decideHeartbeat`；新增门卫事件记录；`session-config` 事件不再记录 `randomSeed`。不新增状态、不分叉流程 |
+| `src/config.ts` / `types.ts` | 新增 `gatekeeper_model` 可选字段；废弃字段保持宽松解析；`serializeConfig` 停止主动写出 `heartbeat_probability`/`random_seed`（旧文件中的同名键经 `extraFields` 原样透传） |
+| `src/management-tools.ts` | `update_shadow_config` 参数 schema 移除 `heartbeat_probability`、`random_seed`；round-trip 不再引用已删除的 config 字段 |
+| 删除 | `decideHeartbeat`、`sample`、调度路径上的 `random` 注入（`createRandom` 已确认无其他使用者，随 `random.ts` 一并删除） |
 
 Shadow 执行路径（`shadow-runner.ts`、`trajectory.ts`、报告批处理、watchdog、headless drain）零改动，仅 `buildShadowRequest` 签名扩展。
 
@@ -110,7 +112,7 @@ Shadow 执行路径（`shadow-runner.ts`、`trajectory.ts`、报告批处理、w
 - `gatekeeper-decision`：`{ activated: [{id, brief}], candidates, truncated?: true }`
 - `gatekeeper-error`：`{ error }`（含解析失败、超时、auth 缺失）
 
-`statusLines()` 中原 `heartbeat x.x` 一段替换为 `gatekeeper <model>`。
+`statusLines()` 中原 `heartbeat x.x` 一段替换为 `gatekeeper <model>`；近期 `gatekeeper-error` 纳入状态行警告标志（复用 `hasRecentRunErrors` 的模式）——门卫持续失败等于 Shadow 永不唤醒，必须从 `🐙 n!` 直接可见，不能只沉在事件列表里。
 
 ## 7. 测试策略（vitest，纯单元）
 
@@ -119,6 +121,8 @@ Shadow 执行路径（`shadow-runner.ts`、`trajectory.ts`、报告批处理、w
 - `test/protocol.test.ts`：brief 注入格式；缺省 brief 时输出向后兼容快照。
 - `test/runtime.test.ts`：注入假门卫，验证 预筛→门卫→激活 编排、失败跳过、事件记录。
 - `test/config.test.ts`：`gatekeeper_model` 解析与旧字段宽容接受。
+- `test/management-tools.test.ts`：`update_shadow_config` 不再接受废弃参数；旧配置中的废弃键经 `extraFields` 无损 round-trip。
+- 删除 `test/random.test.ts`（随 `random.ts` 一并删除）。
 
 ## 8. 文档同步
 
