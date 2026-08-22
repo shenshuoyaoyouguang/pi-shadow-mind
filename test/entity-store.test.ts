@@ -93,13 +93,16 @@ describe("EntityStore persistence integrity", () => {
       const store = new EntityStore(registry, join(agentDir, "shadow-minds", "config.json"));
       await store.create({ id: "dup", prompt: "First prompt" });
       await expect(store.create({ id: "dup", prompt: "Second prompt" })).rejects.toThrow(/shadow 'dup' already exists/);
+      let caughtError: Error | undefined;
       try {
         await store.create({ id: "dup", prompt: "Second prompt" });
       } catch (e) {
-        const msg = (e as Error).message;
-        expect(msg).not.toMatch(/\//);
-        expect(msg).toBe("shadow 'dup' already exists");
+        caughtError = e as Error;
       }
+      expect(caughtError).toBeDefined();
+      const msg = caughtError!.message;
+      expect(msg).not.toMatch(/\//);
+      expect(msg).toBe("shadow 'dup' already exists");
     } finally {
       await rm(agentDir, { recursive: true, force: true });
     }

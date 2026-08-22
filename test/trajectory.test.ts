@@ -55,6 +55,15 @@ describe("serializeTrajectory", () => {
     expect(result).not.toContain(oversized);
   });
 
+  it("skips oversized newest report but continues to include fitting older reports", () => {
+    const oversized = "x".repeat(4500);
+    const older = "fitting older report";
+    const result = serializeTrajectory([report(older), report(oversized)]);
+    expect(result).toContain("fitting older report");
+    expect(result).not.toContain(oversized);
+    expect(result).toContain("(1 older report omitted)");
+  });
+
   it("flattens newlines inside a message into single labeled lines", () => {
     const result = serializeTrajectory([
       { role: "user", content: [{ type: "text", text: "First line.\nSecond line." }] },

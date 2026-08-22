@@ -10,7 +10,7 @@ export const GATEKEEPER_TIMEOUT_MS = 30_000;
 export const GATEKEEPER_BRIEF_CHARS = 400;
 
 const OMISSION_MARKER = "[...earlier trajectory omitted...]";
-const SEGMENT_START = /^(USER|MAIN|TOOL RESULT|TOOL):/;
+const SEGMENT_START = /^(USER|MAIN|TOOL RESULT|TOOL):/i;
 
 const SYSTEM_PROMPT = `You are the Shadow Mind dispatcher. You decide which persistent Shadow Minds should be woken for the current main-agent turn.
 You receive a candidate list (id | name | responsibility) and a sanitized trajectory of the main agent's recent activity.
@@ -50,12 +50,14 @@ export interface RunGatekeeperOptions {
 export function buildGatekeeperPrompt(
   candidates: readonly ShadowDefinition[],
   trajectory: string,
-): { systemPrompt: string; userMessage: string } {
+  trajectoryBudgetChars?: number,
+): { systemPrompt: string; userMessage: string; candidateSummaries: string } {
   const list = candidates
     .map((shadow) => `- ${shadow.id} | ${shadow.name} | ${flatten(shadow.prompt).slice(0, GATEKEEPER_BRIEF_CHARS)}`)
     .join("\n");
-  const userMessage = `Candidates:\n${list || "(none)"}\n\nTrajectory:\n${trajectory}\n\nDecide which candidates are relevant to this trajectory and respond with the JSON object.`;
-  return { systemPrompt: SYSTEM_PROMPT, userMessage };
+  const candidateSummaries = list || "(none)";
+  const userMessage = `Candidates:\n${candidateSummaries}\n\nTrajectory:\n${trajectory}\n\nDecide which candidates are relevant to this trajectory and respond with the JSON object.`;
+  return { systemPrompt: SYSTEM_PROMPT, userMessage, candidateSummaries };
 }
 
 function flatten(text: string): string {
@@ -63,8 +65,10 @@ function flatten(text: string): string {
 }
 
 /** chars ≈ tokens × 4 with a 10% margin, matching shadow-runner's estimate. */
-export function fitTrajectory(trajectory: string, contextWindowChars: number): { text: string; truncated: boolean } {
-  if (trajectory.length <= contextWindowChars) return { text: trajectory, truncated: false };
+export function fitTrajectory(trajectory: string, contextWindowChars: number, reservedChars = 0): { text: string; truncated: boolean } {
+  const budget = contextWindowChars - reservedChars;
+  if (budget <= 0) return { text: "", truncated: true };
+  if (trajectory.length <= budget) return { text: trajectory, truncated: false };
   const lines = trajectory.split("\n");
   // Head = the first USER segment (original task intent). Everything after it competes for tail budget.
   let headEnd = lines.findIndex((line, index) => index > 0 && SEGMENT_START.test(line));
@@ -75,7 +79,7 @@ export function fitTrajectory(trajectory: string, contextWindowChars: number): {
   let tailChars = 0;
   for (let index = lines.length - 1; index >= headEnd; index -= 1) {
     const line = lines[index];
-    if (tailChars + line.length + 1 > contextWindowChars - headChars) break;
+    if (tailChars + line.length + 1 > budget - headChars) break;
     tailLines.unshift(line);
     tailChars += line.length + 1;
   }
@@ -144,8 +148,13 @@ export async function runGatekeeper(options: RunGatekeeperOptions): Promise<Gate
     return fail(error instanceof Error ? error.message : String(error));
   }
   // chars ≈ tokens × 4 with a 10% margin, matching shadow-runner's estimate.
-  const fitted = fitTrajectory(options.trajectory, Math.floor(model.contextWindow * 4 * 0.9));
-  const { systemPrompt, userMessage } = buildGatekeeperPrompt(options.candidates, fitted.text);
+  const totalWindowChars = Math.floor(model.contextWindow * 4 * 0.9);
+  // Reserve capacity for system prompt, user message framing, candidate summaries, and omission marker.
+  const { systemPrompt, candidateSummaries } = buildGatekeeperPrompt(options.candidates, "");
+  const framingChars = systemPrompt.length + "Candidates:\n\n\nTrajectory:\n\n\nDecide which candidates are relevant to this trajectory and respond with the JSON object.".length;
+  const reservedChars = framingChars + candidateSummaries.length + OMISSION_MARKER.length;
+  const fitted = fitTrajectory(options.trajectory, totalWindowChars, reservedChars);
+  const { userMessage } = buildGatekeeperPrompt(options.candidates, fitted.text);
   const signals = [AbortSignal.timeout(GATEKEEPER_TIMEOUT_MS)];
   if (options.signal) signals.push(options.signal);
   let message: AssistantMessage;

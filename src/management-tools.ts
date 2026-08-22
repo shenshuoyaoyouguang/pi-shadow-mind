@@ -109,6 +109,7 @@ function configWriteTool(store: EntityStore, getConfig: () => ShadowConfig): Too
     result_batch_window_ms: Type.Optional(Type.Integer({ minimum: 0 })),
     default_shadow_model: Type.Optional(Type.String()),
     default_thinking_level: Type.Optional(THINKING),
+    gatekeeper_model: Type.Optional(Type.String()),
   }), async (_id, params, _signal, _update, ctx) => {
     try {
       const current = getConfig();
@@ -122,6 +123,7 @@ function configWriteTool(store: EntityStore, getConfig: () => ShadowConfig): Too
         result_batch_window_ms: raw.result_batch_window_ms ?? current.resultBatchWindowMs,
         default_shadow_model: raw.default_shadow_model ?? current.defaultShadowModel,
         default_thinking_level: raw.default_thinking_level ?? current.defaultThinkingLevel,
+        gatekeeper_model: raw.gatekeeper_model ?? current.gatekeeperModel,
       });
       if (!(await confirm(ctx, "Update Shadow Config", `Apply this config?\n${JSON.stringify(next, null, 2)}`))) return textResult("Cancelled.");
       await store.writeConfig(next);

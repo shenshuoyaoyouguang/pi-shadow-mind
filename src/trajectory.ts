@@ -85,7 +85,7 @@ function selectShadowFeedback(texts: readonly string[]): number {
   let chars = 0;
   for (let index = texts.length - 1; index >= 0 && kept < SHADOW_FEEDBACK_MAX_REPORTS; index -= 1) {
     const text = texts[index];
-    if (chars + text.length > SHADOW_FEEDBACK_MAX_CHARS) break;
+    if (chars + text.length > SHADOW_FEEDBACK_MAX_CHARS) continue;
     kept += 1;
     chars += text.length;
   }

@@ -1,6 +1,6 @@
 ## Review
 
-Second-round review of `D:/AI/2026.8.18/pi-shadow-mind`, read-only. Two passes: (1) full read of every file in the uncommitted diff plus the build/packaging files and all 15 test suites; (2) line-level verification of the 10 focus areas and the 14 round-1 findings. I have no shell access in this run, so I could not execute `git diff/show` or `npm run verify`; test status is taken from the task statement (GREEN, 15 files / 87 tests) and cross-checked against what the tests assert in source. The working tree was not mutated.
+Second-round review of `pi-shadow-mind` at commit 221791f, read-only. Two passes: (1) full read of every file in the uncommitted diff plus the build/packaging files and all 15 test suites; (2) line-level verification of the 10 focus areas and the 14 round-1 findings. I have no shell access in this run, so I could not execute `git diff/show` or `npm run verify`; test status is taken from the task statement (GREEN, 15 files / 119 tests) and cross-checked against what the tests assert in source. The working tree was not mutated.
 
 ### Strengths
 
@@ -14,7 +14,7 @@ Second-round review of `D:/AI/2026.8.18/pi-shadow-mind`, read-only. Two passes: 
 
 | # | Finding | Verdict |
 |---|---|---|
-| 1 | 22 failing tests | Fixed (per task: 87 green; tests read match new behavior) |
+| 1 | 22 failing tests | Fixed (per task: 119 green; tests read match new behavior) |
 | 2 | Test gaps (store/tools/runtime) | Fixed — 3 new suites, real-behavior style (see Strengths) |
 | 3 | Batcher fire-and-forget rejection | Fixed — src/report-batcher.ts:22 `void this.flush().catch(() => {})` + queue `run.catch` (src/report-batcher.ts:28-30). No direct unit test (see I3) |
 | 4 | Stale ctx deactivated lifetime | Fixed + tested (src/session-lifetime.ts:22-31; test/session-lifetime.test.ts:13-21) |
@@ -63,8 +63,8 @@ test/report-batcher.test.ts contains only the original window-combination test. 
 - **M3 — Redundant catch in the hardlink branch.** src/entity-store.ts:137-141: `if (EEXIST) throw error; throw error;` — both arms identical; collapse to a single `throw error` (keep the tmp-cleanup `unlink`).
 - **M4 — Multi-line text in the plain trajectory produces unlabeled continuation lines.** `appendText`/the `SHADOW FEEDBACK` push in src/trajectory.ts:66-96 keep embedded newlines from user messages, main text, and multi-line reports; a two-line report renders as `SHADOW FEEDBACK: line1` then a bare `line2` in a line-oriented transcript. Consider flattening newlines in `extractText`-derived text (as `compact()` already does for previews).
 - **M5 — Tool schemas omit `thinking_level: "off"`.** `THINKING` in src/management-tools.ts:12 lists `minimal…max`, but the canonical set in src/validation.ts:3 (and the registry parser, test/registry.test.ts:25-30) accepts `off`. The agent can't set `off` even though the file format allows it; reuse `THINKING_LEVELS` to build the union.
-- **M6 — README install pin stale.** README.md (both English and 中文 sections) says `pi install npm:pi-shadow-mind@0.1.11`; package.json is `0.1.14`. Pre-existing, but the next release bump should update both lines.
-- **M7 — `.omo/` is untracked and not gitignored.** `.omo/run-continuation/*.json` (13 files) will show as untracked noise in `git status`; `.codegraph/` already self-ignores via its own `.gitignore`. Add `.omo/` to the repo `.gitignore` (I could not run `git status` to confirm the exact noise; the files are absent from `.git/index` and from `.gitignore`).
+- **M6 — README install pin stale.** README.md (both English and 中文 sections) says `pi install npm:pi-shadow-mind@0.1.11`; package.json is `0.2.0`. Pre-existing, but the next release bump should update both lines.
+- **M7 — `.omo/` is untracked and not gitignored.** Fixed: `.omo/` is now in the repo `.gitignore` (line 7).
 - **M8 — Heartbeat rejection handling relies on the Pi framework.** `onHeartbeat` returns the unhandled-protected `next` to the `turn_end` handler (src/runtime.ts:151-154); the chain itself is safe, and a rejecting `runHeartbeat` (e.g. `readdir` EACCES inside `registry.load`) is only handled if Pi catches async handler rejections. If Pi doesn't, consider `next.catch(err => this.record("heartbeat-error", {...}))` before returning.
 - **M9 — `delete_shadow` on an unparseable shadow can report false success.** If a file fails frontmatter parsing it's absent from the registry, so `EntityStore.delete` falls back to unlinking `<id>.md` (src/entity-store.ts:75-86); if the user's file has a different name, the fallback misses, `ENOENT` is swallowed, and the tool reports "Deleted …" while the file remains. Edge case; consider scanning registry diagnostics for a matching path, or reporting "not found" when the fallback unlink hits nothing.
 - **M10 — Build hardening nit.** scripts/build.mjs:31-33 treats only the exact string `typebox` as allowed; a future `import ... from "typebox/value"` would fail the external check rather than being recognized (it would be bundled instead, violating the peer-dependency assumption). Use `path === "typebox" || path.startsWith("typebox/")`.
@@ -83,4 +83,4 @@ test/report-batcher.test.ts contains only the original window-combination test. 
 **Ready to merge?** With fixes.
 **Reasoning:** The round-2 work is high quality and all 14 round-1 findings are genuinely addressed in code and tests, but the hardlink-based create is very likely broken for non-elevated Windows users (C1), `update_shadow_config` silently drops user config keys (I1), and the error-redaction gap on Windows paths (I4) plus the DESIGN.md contract drift (I2) should be closed before this ships.
 
-Commands the supervisor should run (I have no shell access): `npm run verify` (confirm 87/87 after any fixes), `git status --porcelain` and `git diff --cached --name-only` (confirm no staged files), and a non-elevated-Windows probe: `node -e "const {link,rm}=require('fs/promises');link('a','b').then(()=>console.log('ok')).catch(e=>console.log(e.code))"` in an empty temp dir.
+Commands the supervisor should run (I have no shell access): `npm run verify` (confirm 119/119 after any fixes), `git status --porcelain` and `git diff --cached --name-only` (confirm no staged files), and a non-elevated-Windows probe: `node -e "const {writeFile,link,rm}=require('fs/promises');(async()=>{await writeFile('a','');await link('a','b');await rm('a');await rm('b')})().then(()=>console.log('ok')).catch(e=>console.log(e.code))"` in an empty temp dir.

@@ -20,7 +20,8 @@ describe("parseConfig", () => {
 
   it("round-trips deprecated keys without writing them as known fields", () => {
     const text = serializeConfig(parseConfig({ heartbeat_probability: 0.5 }));
-    expect(text).not.toContain('"heartbeat_probability": 0.5,\n    "max_parallel_shadows"');
+    expect(text).toContain("heartbeat_probability");
+    expect(text).not.toMatch(/"heartbeat_probability":\s*0\.5,\s*"max_parallel_shadows"/);
     const reparsed = parseConfig(JSON.parse(text));
     expect(reparsed.extraFields?.heartbeat_probability).toBe(0.5);
   });

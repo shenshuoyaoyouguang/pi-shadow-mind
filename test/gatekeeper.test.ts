@@ -54,6 +54,15 @@ describe("fitTrajectory", () => {
     expect(result.text).not.toContain("MAIN: a\n");
     expect(result.text.length).toBeLessThanOrEqual(40 + 64); // budget + omission marker
   });
+
+  it("preserves the initial user segment case-insensitively during truncation", () => {
+    const segments = ["User: original task", "Main: middle content", "TOOL: final"];
+    const trajectory = segments.join("\n");
+    const result = fitTrajectory(trajectory, 30);
+    expect(result.truncated).toBe(true);
+    expect(result.text).toContain("User: original task");
+    expect(result.text).toContain("TOOL: final");
+  });
 });
 
 describe("buildGatekeeperPrompt", () => {
