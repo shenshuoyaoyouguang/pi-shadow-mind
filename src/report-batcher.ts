@@ -23,20 +23,26 @@ export class ReportBatcher {
     }, this.windowMs);
   }
 
-  /** Serialized: at most one delivery is in flight at any time. */
+  /** Serialized: at most one delivery is in flight at any time. Each flush
+   * delivers only the reports pending when it was called (the timer is cleared
+   * synchronously), so a queued flush cannot cancel a newer report's window.
+   * The delivery is counted from enqueue so hasPending has no gap between the
+   * flush call and the delivery actually starting. */
   flush(): Promise<void> {
-    const run = this.queue.then(() => this.deliverPending());
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = undefined;
+    }
+    const batch = this.reports;
+    this.reports = [];
+    if (!batch.length) return this.queue;
+    this.deliveries += 1;
+    const run = this.queue.then(() => this.deliverBatch(batch));
     this.queue = run.catch(() => {});
     return run;
   }
 
-  private async deliverPending(): Promise<void> {
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = undefined;
-    if (!this.reports.length) return;
-    const batch = this.reports;
-    this.reports = [];
-    this.deliveries += 1;
+  private async deliverBatch(batch: ShadowReport[]): Promise<void> {
     try {
       await this.deliver(batch);
     } finally {

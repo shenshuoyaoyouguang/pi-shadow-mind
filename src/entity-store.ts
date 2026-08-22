@@ -78,12 +78,16 @@ export class EntityStore {
       filePath = (await this.get(id)).filePath;
     } catch (error) {
       if (error instanceof Error && error.message.startsWith("shadow not found:")) {
-        filePath = join(this.registry.directory, `${id}.md`);
+        // The id is not in the registry (never existed, externally removed, or
+        // an unparseable definition under some filename). Best effort: remove
+        // the canonical file; if nothing is there, report not-found instead of
+        // false success — the definition may live under a different filename.
+        const fallbackPath = join(this.registry.directory, `${id}.md`);
         try {
-          await unlink(filePath);
+          await unlink(fallbackPath);
         } catch (inner) {
-          if ((inner as NodeJS.ErrnoException).code === "ENOENT") return;
-          throw inner;
+          if ((inner as NodeJS.ErrnoException).code !== "ENOENT") throw inner;
+          throw new Error(`shadow not found: ${id}`);
         }
         return;
       }

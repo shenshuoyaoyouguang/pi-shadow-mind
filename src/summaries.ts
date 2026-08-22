@@ -60,5 +60,8 @@ const PREVIEW_MAX_CHARS = 200;
 
 function compact(value: string): string {
   const collapsed = value.replace(/\s+/g, " ").trim();
-  return collapsed.length > PREVIEW_MAX_CHARS ? `${collapsed.slice(0, PREVIEW_MAX_CHARS)}…` : collapsed;
+  if (collapsed.length <= PREVIEW_MAX_CHARS) return collapsed;
+  // Slice by code points: a UTF-16 cut would split an astral character's
+  // surrogate pair and feed a lone surrogate into the trajectory prompt.
+  return `${Array.from(collapsed).slice(0, PREVIEW_MAX_CHARS).join("")}…`;
 }

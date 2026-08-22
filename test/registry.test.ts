@@ -57,6 +57,17 @@ describe("parseShadowMarkdown", () => {
     const reparsed = parseShadowMarkdown(re, "/tmp/my-shadow.md");
     expect(reparsed.extraFields).toEqual({ custom_field: "keep-me", another_unknown: 42 });
   });
+
+  it("preserves a __proto__ frontmatter key instead of routing it through the setter", () => {
+    const src = '---\nid: proto-shadow\n__proto__:\n  polluted: true\ncustom_field: keep-me\n---\n\nPrompt body';
+    const parsed = parseShadowMarkdown(src, "/tmp/proto-shadow.md");
+    expect(Object.getOwnPropertyNames(parsed.extraFields)).toContain("__proto__");
+    expect((parsed.extraFields as any).__proto__).toEqual({ polluted: true });
+    const re = serializeShadow({ id: parsed.id, prompt: parsed.prompt, extraFields: parsed.extraFields } as any);
+    expect(re).toContain("__proto__");
+    const reparsed = parseShadowMarkdown(re, "/tmp/proto-shadow.md");
+    expect(Object.getOwnPropertyNames(reparsed.extraFields)).toContain("__proto__");
+  });
 });
 
 describe("ShadowRegistry persistence integrity", () => {

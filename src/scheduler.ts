@@ -12,19 +12,20 @@ export function shouldEvaluateHeartbeat(toolResults: readonly unknown[]): boolea
 /**
  * Deterministic prefilter for gatekeeper dispatch: enabled, not already
  * running, active_for_models matches the main model. Slot budgeting stays with
- * the caller; disabled and model-mismatched shadows are reported separately so
- * heartbeat events stay auditable.
+ * the caller; disabled, model-mismatched and running shadows are reported in
+ * separate buckets so heartbeat events stay auditable.
  */
 export function selectCandidates(options: {
   shadows: readonly ShadowDefinition[];
   activeShadowIds: ReadonlySet<string>;
   mainModelId: string;
-}): { candidates: ShadowDefinition[]; modelFiltered: string[]; runningExcluded: string[] } {
+}): { candidates: ShadowDefinition[]; disabled: string[]; modelFiltered: string[]; runningExcluded: string[] } {
+  const disabled: string[] = [];
   const modelFiltered: string[] = [];
   const runningExcluded: string[] = [];
   const candidates = options.shadows.filter((shadow) => {
     if (!shadow.enabled) {
-      modelFiltered.push(shadow.id);
+      disabled.push(shadow.id);
       return false;
     }
     if (options.activeShadowIds.has(shadow.id)) {
@@ -37,7 +38,7 @@ export function selectCandidates(options: {
     }
     return true;
   });
-  return { candidates, modelFiltered, runningExcluded };
+  return { candidates, disabled, modelFiltered, runningExcluded };
 }
 
 export function matchesModel(shadow: ShadowDefinition, fullModelId: string): boolean {

@@ -50,7 +50,6 @@ export interface RunGatekeeperOptions {
 export function buildGatekeeperPrompt(
   candidates: readonly ShadowDefinition[],
   trajectory: string,
-  trajectoryBudgetChars?: number,
 ): { systemPrompt: string; userMessage: string; candidateSummaries: string } {
   const list = candidates
     .map((shadow) => `- ${shadow.id} | ${shadow.name} | ${flatten(shadow.prompt).slice(0, GATEKEEPER_BRIEF_CHARS)}`)
@@ -70,11 +69,27 @@ export function fitTrajectory(trajectory: string, contextWindowChars: number, re
   if (budget <= 0) return { text: "", truncated: true };
   if (trajectory.length <= budget) return { text: trajectory, truncated: false };
   const lines = trajectory.split("\n");
-  // Head = the first USER segment (original task intent). Everything after it competes for tail budget.
-  let headEnd = lines.findIndex((line, index) => index > 0 && SEGMENT_START.test(line));
-  if (headEnd < 0) headEnd = 0;
+  // Head = everything through the end of the first USER segment (the
+  // <main-agent-trajectory> wrapper plus the original task intent). Everything
+  // after it competes for tail budget.
+  const userStart = lines.findIndex((line) => /^USER:/i.test(line));
+  let headEnd = 0;
+  if (userStart >= 0) {
+    headEnd = lines.findIndex((line, index) => index > userStart && SEGMENT_START.test(line));
+    if (headEnd < 0) headEnd = lines.length;
+  }
   const headLines = headEnd > 0 ? lines.slice(0, headEnd) : [];
-  const headChars = headLines.join("\n").length;
+  let headChars = headLines.join("\n").length;
+  if (headChars > budget) {
+    // Even the head alone exceeds the window (e.g. tiny context model plus a
+    // large candidate list): cap it by code points so the gatekeeper still
+    // receives the start of the original task intent and the output stays
+    // within budget instead of failing the model call.
+    const capped = `${Array.from(headLines.join("\n")).slice(0, Math.max(1, budget - 1)).join("")}…`;
+    headLines.length = 0;
+    headLines.push(capped);
+    headChars = capped.length;
+  }
   const tailLines: string[] = [];
   let tailChars = 0;
   for (let index = lines.length - 1; index >= headEnd; index -= 1) {
@@ -112,8 +127,29 @@ function extractJson(text: string): unknown {
     // fall through to brace extraction
   }
   const start = source.indexOf("{");
-  const end = source.lastIndexOf("}");
-  if (start >= 0 && end > start) return JSON.parse(source.slice(start, end + 1));
+  if (start < 0) throw new Error("no JSON object in gatekeeper reply");
+  // Extract the first balanced object so trailing prose containing braces
+  // cannot extend the slice past the reply.
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < source.length; index += 1) {
+    const char = source[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+    } else if (char === "{") {
+      depth += 1;
+    } else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) return JSON.parse(source.slice(start, index + 1));
+    }
+  }
   throw new Error("no JSON object in gatekeeper reply");
 }
 

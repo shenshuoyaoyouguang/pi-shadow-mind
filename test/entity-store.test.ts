@@ -124,7 +124,7 @@ describe("EntityStore persistence integrity", () => {
     }
   });
 
-  it("#14 delete is idempotent when file already removed externally", async () => {
+  it("#14 delete of an externally removed shadow reports not-found instead of false success", async () => {
     const agentDir = await makeAgentDir();
     try {
       const registry = new ShadowRegistry(agentDir);
@@ -132,7 +132,42 @@ describe("EntityStore persistence integrity", () => {
       await store.create({ id: "del1", prompt: "Prompt for delete test" });
       const shadow = await store.get("del1");
       await unlink(shadow.filePath);
-      await expect(store.delete("del1")).resolves.toBeUndefined();
+      await expect(store.delete("del1")).rejects.toThrow(/shadow not found: del1/);
+    } finally {
+      await rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("#14 delete removes an unparseable definition stored under the canonical filename", async () => {
+    const agentDir = await makeAgentDir();
+    try {
+      const registry = new ShadowRegistry(agentDir);
+      const store = new EntityStore(registry, join(agentDir, "shadow-minds", "config.json"));
+      await registry.initialize();
+      const filePath = join(registry.directory, "unparseable.md");
+      // Valid-looking id, but the frontmatter fails parsing (bad probability).
+      await writeFile(filePath, "---\nid: unparseable\nactivation_probability: 5\n---\n\nPrompt body\n", "utf8");
+      await store.delete("unparseable");
+      const files = await readdir(registry.directory);
+      expect(files).not.toContain("unparseable.md");
+    } finally {
+      await rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("#14 delete reports not-found when an invalid definition lives under a different filename", async () => {
+    const agentDir = await makeAgentDir();
+    try {
+      const registry = new ShadowRegistry(agentDir);
+      const store = new EntityStore(registry, join(agentDir, "shadow-minds", "config.json"));
+      await registry.initialize();
+      // Frontmatter id says "renamed", but the file is stored as other-name.md
+      // and fails parsing, so neither the registry nor the canonical path finds it.
+      await writeFile(join(registry.directory, "other-name.md"), "---\nid: renamed\nactivation_probability: 5\n---\n\nPrompt body\n", "utf8");
+      await expect(store.delete("renamed")).rejects.toThrow(/shadow not found: renamed/);
+      // The file was never touched: a false "Deleted" report would hide it.
+      const files = await readdir(registry.directory);
+      expect(files).toContain("other-name.md");
     } finally {
       await rm(agentDir, { recursive: true, force: true });
     }
@@ -188,8 +223,26 @@ describe("EntityStore persistence integrity", () => {
       expect(content).toContain("No hardlink prompt");
       const files = await readdir(registry.directory);
       expect(files.filter((f) => f.includes(".tmp"))).toEqual([]);
-      // A racing duplicate still surfaces as the domain error, not the raw fs code.
+      // A sequential duplicate is rejected by the registry prefilter; the
+      // EEXIST remap path is covered by its own test below.
       await expect(store.create({ id: "nolink", prompt: "again" })).rejects.toThrow(/shadow 'nolink' already exists/);
+    } finally {
+      await rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("create surfaces the domain error when an unparseable file already claims the id", async () => {
+    // The registry prefilter cannot see an unparseable definition, so create
+    // reaches atomicWriteFile and must remap the raw EEXIST to the domain error.
+    const agentDir = await makeAgentDir();
+    try {
+      const registry = new ShadowRegistry(agentDir);
+      const store = new EntityStore(registry, join(agentDir, "shadow-minds", "config.json"));
+      await registry.initialize();
+      await writeFile(join(registry.directory, "claimed.md"), "---\nid: claimed\nactivation_probability: 5\n---\n\nPrompt body\n", "utf8");
+      await expect(store.create({ id: "claimed", prompt: "mine now" })).rejects.toThrow(/shadow 'claimed' already exists/);
+      const raw = await readFile(join(registry.directory, "claimed.md"), "utf8");
+      expect(raw).toContain("Prompt body"); // existing file untouched
     } finally {
       await rm(agentDir, { recursive: true, force: true });
     }

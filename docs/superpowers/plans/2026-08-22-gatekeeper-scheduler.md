@@ -387,7 +387,9 @@ export async function runGatekeeper(options: RunGatekeeperOptions): Promise<Gate
     message = await deps.complete(
       model,
       { systemPrompt, messages: [{ role: "user", content: userMessage }] },
-      { signal: AbortSignal.any(signals), reasoning: thinkingLevel },
+      // pi-agent-core's ThinkingLevel adds "off", which pi-ai's reasoning option
+      // does not accept; "off" maps to no reasoning request.
+      { signal: AbortSignal.any(signals), reasoning: thinkingLevel === "off" ? undefined : thinkingLevel },
     );
   } catch (error) {
     return fail(error instanceof Error ? error.message : String(error));

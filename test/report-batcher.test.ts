@@ -77,6 +77,26 @@ describe("ReportBatcher", () => {
     batcher.clear();
   });
 
+  it("a queued flush does not cancel a newer report's batching window", async () => {
+    const order: string[] = [];
+    let releaseFirst!: () => void;
+    const gate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const batcher = new ReportBatcher(50, async (reports) => {
+      order.push(reports.map(({ content }) => content).join(","));
+      if (reports[0]!.content === "one") await gate;
+    });
+    batcher.add(report("one", "1"));
+    const first = batcher.flush(); // in-flight delivery of [one], blocked on the gate
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    batcher.add(report("two", "2")); // starts window T2
+    const second = batcher.flush(); // queued; snapshots [two], clears T2 at enqueue time
+    batcher.add(report("three", "3")); // starts its own fresh window T3
+    releaseFirst!();
+    await Promise.all([first, second]);
+    await new Promise((resolve) => setTimeout(resolve, 120)); // T3 fires undisturbed
+    expect(order).toEqual(["one", "two", "three"]); // old behavior: ["one", "two,three"]
+  });
+
   it("clear() drops pending reports and returns the dropped count", async () => {
     const batcher = new ReportBatcher(100, () => {});
     expect(batcher.clear()).toBe(0);

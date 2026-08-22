@@ -1,18 +1,19 @@
-import { lstat, mkdir, readdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, rename, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtemp, rm } from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import { atomicWriteFile } from "../src/atomic-file.js";
 
-// Track fs.promises.link/copyFile so tests can simulate hardlink-unavailable
-// platforms (Windows without SeCreateSymbolicLinkPrivilege) and copy failures.
+// Track fs.promises.link/copyFile/rename so tests can simulate hardlink-unavailable
+// platforms (Windows without SeCreateSymbolicLinkPrivilege) and publish failures.
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   return {
     ...actual,
     link: vi.fn((...args: Parameters<typeof actual.link>) => actual.link(...args)),
     copyFile: vi.fn((...args: Parameters<typeof actual.copyFile>) => actual.copyFile(...args)),
+    rename: vi.fn((...args: Parameters<typeof actual.rename>) => actual.rename(...args)),
   };
 });
 
@@ -114,6 +115,67 @@ describe("atomicWriteFile", () => {
         }
       },
     );
+
+    it.skipIf(!symlinkSupported)(
+      "writes through a symlink chain, preserving every intermediate link",
+      async () => {
+        const dir = await makeDir();
+        try {
+          const targetDir = join(dir, "deep-target");
+          await mkdir(targetDir, { recursive: true });
+          const targetPath = join(targetDir, "real.txt");
+          const link2 = join(dir, "link2.txt");
+          const link1 = join(dir, "link1.txt");
+          await writeFile(targetPath, "original", "utf8");
+          await symlink(targetPath, link2);
+          await symlink(link2, link1);
+
+          await atomicWriteFile(link1, "updated through the chain", { overwrite: true });
+
+          expect((await lstat(link1)).isSymbolicLink()).toBe(true);
+          expect((await lstat(link2)).isSymbolicLink()).toBe(true);
+          expect(await readFile(targetPath, "utf8")).toBe("updated through the chain");
+        } finally {
+          await rm(dir, { recursive: true, force: true });
+        }
+      },
+    );
+
+    it.skipIf(!symlinkSupported)(
+      "writes at the final hop of a dangling chain instead of replacing the link",
+      async () => {
+        const dir = await makeDir();
+        try {
+          const missingTarget = join(dir, "shared", "not-there.txt");
+          const linkPath = join(dir, "dangling.txt");
+          await symlink(missingTarget, linkPath);
+
+          await atomicWriteFile(linkPath, "revived", { overwrite: true });
+
+          expect((await lstat(linkPath)).isSymbolicLink()).toBe(true);
+          expect(await readFile(missingTarget, "utf8")).toBe("revived");
+        } finally {
+          await rm(dir, { recursive: true, force: true });
+        }
+      },
+    );
+
+    it("cleans up the staged tmp file when the overwrite rename fails", async () => {
+      const { rename } = await import("node:fs/promises");
+      const renameMock = rename as unknown as { mockRejectedValueOnce: (value: unknown) => void };
+      renameMock.mockRejectedValueOnce(Object.assign(new Error("EPERM: operation not permitted, rename"), { code: "EPERM" }));
+      const dir = await makeDir();
+      try {
+        const filePath = join(dir, "file.txt");
+        await writeFile(filePath, "original", "utf8");
+        await expect(atomicWriteFile(filePath, "x", { overwrite: true })).rejects.toMatchObject({ code: "EPERM" });
+        expect(await readFile(filePath, "utf8")).toBe("original");
+        const files = await readdir(dir);
+        expect(files.filter((f) => f.includes(".tmp"))).toEqual([]);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
 
     it("falls back to filePath when the target does not exist yet (ENOENT)", async () => {
       const dir = await makeDir();

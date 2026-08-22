@@ -146,7 +146,8 @@ export class ShadowRunner {
       const model = resolveRunModel(request);
       assertShadowModelAuth(model, request);
       const trajectory = serializeTrajectory(request.messages);
-      assertTrajectoryFits(model, [trajectory]);
+      const shadowRequest = buildShadowRequest(trajectory, request.shadow, request.brief);
+      assertTrajectoryFits(model, request.mainSystemPrompt, shadowRequest);
       sessionManager = await createShadowSessionManager(request);
       const boot = await this.bootstrapSession(request, model, controller, state, sessionManager);
       state.session = boot.session;
@@ -165,7 +166,7 @@ export class ShadowRunner {
         void boot.session?.abort();
       }, timeoutMs);
       controller.signal.addEventListener("abort", () => void boot.session?.abort(), { once: true });
-      await boot.session.prompt(buildShadowRequest(trajectory, request.shadow, request.brief));
+      await boot.session.prompt(shadowRequest);
       await boot.session.waitForIdle();
       finalReason = runReason(state.timedOut, state.reported, controller.signal.aborted);
       return buildRunResult({ reason: finalReason, durationMs: Date.now() - started, session: boot.session, baseMessageCount, missingTools, thinkingLevel });
@@ -350,13 +351,20 @@ export function resolveRunThinkingLevel(model: Model<any>, request: ShadowRunReq
 }
 
 /**
- * Rough fit check: real tokens ≈ serialized chars / 4, so chars / 2 rejected
- * many trajectories that would actually fit. A 10% safety margin keeps the
- * estimate conservative without the false rejections.
+ * Rough fit check over the full prompt context (inherited system prompt plus
+ * the complete Shadow request text). ASCII serializes to ≈4 chars per token,
+ * but CJK and other non-ASCII text averages closer to one token per character,
+ * so non-ASCII chars are weighted 1:1 to keep the estimate conservative; a 10%
+ * margin covers the rest.
  */
-function assertTrajectoryFits(model: Model<any>, messages: readonly unknown[]): void {
-  const chars = messages.reduce<number>((sum, message) => sum + (JSON.stringify(message)?.length ?? 0), 0);
-  const estimated = Math.ceil((chars / 4) * 1.1);
+function assertTrajectoryFits(model: Model<any>, systemPrompt: string, requestText: string): void {
+  let ascii = systemPrompt.length;
+  let nonAscii = 0;
+  for (let index = 0; index < requestText.length; index += 1) {
+    if (requestText.charCodeAt(index) > 0x7f) nonAscii += 1;
+    else ascii += 1;
+  }
+  const estimated = Math.ceil((ascii / 4 + nonAscii) * 1.1);
   if (estimated > model.contextWindow) {
     throw new Error(`trajectory ~${estimated} tokens exceeds ${model.provider}/${model.id} context window (${model.contextWindow})`);
   }

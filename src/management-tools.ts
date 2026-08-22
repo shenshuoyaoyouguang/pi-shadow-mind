@@ -102,14 +102,17 @@ function configReadTool(store: EntityStore): ToolDefinition {
 }
 
 function configWriteTool(store: EntityStore, getConfig: () => ShadowConfig): ToolDefinition {
-  return tool("update_shadow_config", "Update Shadow Config", "Update global Shadow Mind runtime configuration after user confirmation.", Type.Object({
+  // Model overrides accept null as an explicit clear: once set, there is no
+  // other way back to default_shadow_model / the main model.
+  const modelField = Type.Optional(Type.Union([Type.String(), Type.Null()]));
+  return tool("update_shadow_config", "Update Shadow Config", "Update global Shadow Mind runtime configuration after user confirmation. Pass null for a model field to clear it.", Type.Object({
     max_parallel_shadows: Type.Optional(Type.Integer({ minimum: 1 })),
     default_shadow_timeout_seconds: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
     headless_drain_timeout_seconds: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
     result_batch_window_ms: Type.Optional(Type.Integer({ minimum: 0 })),
-    default_shadow_model: Type.Optional(Type.String()),
+    default_shadow_model: modelField,
     default_thinking_level: Type.Optional(THINKING),
-    gatekeeper_model: Type.Optional(Type.String()),
+    gatekeeper_model: modelField,
   }), async (_id, params, _signal, _update, ctx) => {
     try {
       const current = getConfig();
@@ -121,9 +124,9 @@ function configWriteTool(store: EntityStore, getConfig: () => ShadowConfig): Too
         default_shadow_timeout_seconds: raw.default_shadow_timeout_seconds ?? current.defaultShadowTimeoutSeconds,
         headless_drain_timeout_seconds: raw.headless_drain_timeout_seconds ?? current.headlessDrainTimeoutSeconds,
         result_batch_window_ms: raw.result_batch_window_ms ?? current.resultBatchWindowMs,
-        default_shadow_model: raw.default_shadow_model ?? current.defaultShadowModel,
+        default_shadow_model: raw.default_shadow_model === null ? undefined : raw.default_shadow_model ?? current.defaultShadowModel,
         default_thinking_level: raw.default_thinking_level ?? current.defaultThinkingLevel,
-        gatekeeper_model: raw.gatekeeper_model ?? current.gatekeeperModel,
+        gatekeeper_model: raw.gatekeeper_model === null ? undefined : raw.gatekeeper_model ?? current.gatekeeperModel,
       });
       if (!(await confirm(ctx, "Update Shadow Config", `Apply this config?\n${JSON.stringify(next, null, 2)}`))) return textResult("Cancelled.");
       await store.writeConfig(next);
@@ -169,10 +172,11 @@ function toPatch(raw: Record<string, unknown>) {
 function sanitizedError(error: unknown): Error {
   const raw = error instanceof Error ? error.message : String(error);
   // Keep the first line only: Node fs errors are single-line, and stack traces
-  // or diagnostics must never reach the model.
+  // or diagnostics must never reach the model. Quoted paths are redacted whole
+  // (they may contain spaces — Windows, UNC, POSIX), then bare path tokens.
   const firstLine = raw.split("\n")[0];
   const cleaned = firstLine
-    .replace(/['"]?[A-Za-z]:\\[^'"]+['"]?/g, "<path>")
-    .replace(/(^|[\s(])['"]?(\/[^\s'"]*)['"]?/g, "$1<path>");
+    .replace(/'[^']*'|"[^"]*"/g, (token) => (/^['"][A-Za-z]:\\|^['"]\\\\|^['"]\//.test(token) ? "<path>" : token))
+    .replace(/(^|[\s(])(?:[A-Za-z]:\\|\\\\|\/)[^\s'")]*/g, "$1<path>");
   return new Error(cleaned);
 }

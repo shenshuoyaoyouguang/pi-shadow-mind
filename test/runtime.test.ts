@@ -231,11 +231,16 @@ describe("ShadowMindRuntime concurrency", () => {
   });
 
   it("serializes concurrent turn_end heartbeats so parallel slots are not oversubscribed", async () => {
-    const { pi, ctx } = await boot({ shadows: ["alpha", "beta"] });
+    // 3 candidates for 2 slots: a serialized runtime launches 2 and skips the
+    // queued heartbeat (slots exhausted); an unserialized one would read the
+    // same free slots twice and burst past the limit.
+    const { pi, ctx } = await boot({ shadows: ["alpha", "beta", "gamma"] });
     const first = fireTurnEnd(pi, ctx);
     const second = fireTurnEnd(pi, ctx);
     await Promise.all([first, second]);
     await waitFor(() => harness.sessions.length === 2);
+    expect(harness.sessions).toHaveLength(2);
+    await sleep(30);
     expect(harness.sessions).toHaveLength(2);
   });
 
@@ -427,6 +432,26 @@ describe("ShadowMindRuntime concurrency", () => {
     const pending = fireTurnEnd(pi, ctx);
     await waitFor(() => entered);
     fireInput(pi, ctx);
+    await pending;
+    await sleep(10);
+    expect(aborted).toBe(true);
+    expect(harness.sessions).toHaveLength(0);
+  });
+
+  it("aborts an in-flight gatekeeper call on pause", async () => {
+    let aborted = false;
+    let entered = false;
+    const gatekeeper = (options: { signal?: AbortSignal }) => new Promise<{ ok: true; activations: [] }>((_resolve, reject) => {
+      entered = true;
+      options.signal?.addEventListener("abort", () => {
+        aborted = true;
+        reject(new Error("aborted"));
+      });
+    });
+    const { pi, ctx } = await boot({ shadows: ["alpha"], gatekeeper });
+    const pending = fireTurnEnd(pi, ctx);
+    await waitFor(() => entered);
+    togglePause(pi, ctx);
     await pending;
     await sleep(10);
     expect(aborted).toBe(true);

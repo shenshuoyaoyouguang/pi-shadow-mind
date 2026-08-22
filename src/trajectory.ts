@@ -30,7 +30,7 @@ export function serializeTrajectory(messages: readonly MessageLike[]): string {
   const keptFeedback = selectShadowFeedback(feedbackTexts);
 
   const lines: string[] = [];
-  let seenFeedback = 0;
+  let feedbackIndex = -1;
   let omittedMarked = false;
   for (const message of messages) {
     if (message.role === "user") {
@@ -63,11 +63,11 @@ export function serializeTrajectory(messages: readonly MessageLike[]): string {
     if (message.role === "custom" && message.customType === "shadow-report") {
       const text = extractText(message.content);
       if (!text) continue;
-      seenFeedback += 1;
-      if (seenFeedback > feedbackTexts.length - keptFeedback) {
+      feedbackIndex += 1;
+      if (keptFeedback.has(feedbackIndex)) {
         lines.push(`SHADOW FEEDBACK: ${text}`);
       } else if (!omittedMarked) {
-        const omitted = feedbackTexts.length - keptFeedback;
+        const omitted = feedbackTexts.length - keptFeedback.size;
         lines.push(`SHADOW FEEDBACK: (${omitted} older report${omitted === 1 ? "" : "s"} omitted)`);
         omittedMarked = true;
       }
@@ -80,13 +80,19 @@ export function serializeTrajectory(messages: readonly MessageLike[]): string {
   return `<main-agent-trajectory>\n${lines.join("\n")}\n</main-agent-trajectory>`;
 }
 
-function selectShadowFeedback(texts: readonly string[]): number {
-  let kept = 0;
+/**
+ * Keep the most recent reports within the character budget, skipping any single
+ * report that alone exceeds it instead of blocking older fitting ones. Returns
+ * the kept indices — with per-report skips the kept set is not a suffix, so the
+ * renderer cannot reconstruct it from a count.
+ */
+function selectShadowFeedback(texts: readonly string[]): Set<number> {
+  const kept = new Set<number>();
   let chars = 0;
-  for (let index = texts.length - 1; index >= 0 && kept < SHADOW_FEEDBACK_MAX_REPORTS; index -= 1) {
-    const text = texts[index];
+  for (let index = texts.length - 1; index >= 0 && kept.size < SHADOW_FEEDBACK_MAX_REPORTS; index -= 1) {
+    const text = texts[index]!;
     if (chars + text.length > SHADOW_FEEDBACK_MAX_CHARS) continue;
-    kept += 1;
+    kept.add(index);
     chars += text.length;
   }
   return kept;

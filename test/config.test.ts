@@ -35,6 +35,17 @@ describe("parseConfig", () => {
     expect((parsed as any).extraFields).toEqual({ unknown_custom: "keep-me", another: 123 });
   });
 
+  it("preserves a __proto__ unknown key instead of routing it through the setter", () => {
+    const raw = JSON.parse('{"__proto__": {"polluted": true}, "unknown_custom": "keep-me"}');
+    const parsed = parseConfig(raw);
+    expect(Object.getOwnPropertyNames(parsed.extraFields)).toContain("__proto__");
+    expect((parsed.extraFields as any).__proto__).toEqual({ polluted: true });
+    const serialized = serializeConfig(parsed);
+    expect(serialized).toContain("__proto__");
+    const reparsed = parseConfig(JSON.parse(serialized));
+    expect(Object.getOwnPropertyNames(reparsed.extraFields)).toContain("__proto__");
+  });
+
   it("#11 config unknown fields survive serialize/parse", async () => {
     const cfg: any = { ...DEFAULT_CONFIG, extraFields: { my_extra: "value42", num: 7 } };
     const serialized = serializeConfig(cfg);

@@ -33,6 +33,11 @@ describe("parseGatekeeperReply", () => {
     expect(parseGatekeeperReply(text, ids)).toEqual([{ id: "a", brief: "y" }]);
   });
 
+  it("ignores trailing prose that contains further braces", () => {
+    const text = '{"activations":[{"id":"a","brief":"z"}]} Done {note: no more objects}';
+    expect(parseGatekeeperReply(text, ids)).toEqual([{ id: "a", brief: "z" }]);
+  });
+
   it("throws on non-JSON or non-array activations", () => {
     expect(() => parseGatekeeperReply("no json", ids)).toThrow();
     expect(() => parseGatekeeperReply('{"activations":"nope"}', ids)).toThrow();
@@ -58,10 +63,44 @@ describe("fitTrajectory", () => {
   it("preserves the initial user segment case-insensitively during truncation", () => {
     const segments = ["User: original task", "Main: middle content", "TOOL: final"];
     const trajectory = segments.join("\n");
-    const result = fitTrajectory(trajectory, 30);
+    // Head is 19 chars; budget 35 leaves room for the 12-char tail but not the
+    // 21-char middle segment.
+    const result = fitTrajectory(trajectory, 35);
     expect(result.truncated).toBe(true);
     expect(result.text).toContain("User: original task");
     expect(result.text).toContain("TOOL: final");
+    expect(result.text).not.toContain("Main: middle content");
+  });
+
+  it("keeps the wrapper and first USER segment of a serialized trajectory", () => {
+    // Production trajectories start with the <main-agent-trajectory> wrapper
+    // line; the head must include the wrapper AND the first USER segment.
+    const trajectory = ["<main-agent-trajectory>", "USER: original task", "MAIN: a", "MAIN: b", "TOOL: read(x)", "TOOL: write(y)"].join("\n");
+    const result = fitTrajectory(trajectory, 60);
+    expect(result.truncated).toBe(true);
+    expect(result.text).toContain("<main-agent-trajectory>");
+    expect(result.text).toContain("USER: original task");
+    expect(result.text).toContain("TOOL: write(y)");
+    expect(result.text).not.toContain("MAIN: a");
+    expect(result.text).not.toContain("MAIN: b");
+  });
+
+  it("keeps only the tail when there is no USER line", () => {
+    const trajectory = ["<main-agent-trajectory>", "MAIN: a", "MAIN: b", "TOOL: read(x)"].join("\n");
+    const result = fitTrajectory(trajectory, 20);
+    expect(result.truncated).toBe(true);
+    expect(result.text).toContain("TOOL: read(x)");
+    expect(result.text).not.toContain("MAIN: a");
+  });
+
+  it("caps the preserved head when it alone exceeds the budget", () => {
+    const trajectory = ["<main-agent-trajectory>", `USER: ${"task ".repeat(30)}`, "TOOL: read(x)"].join("\n");
+    const result = fitTrajectory(trajectory, 40);
+    expect(result.truncated).toBe(true);
+    // Output stays within budget + marker overhead instead of overflowing the window.
+    expect(result.text.length).toBeLessThanOrEqual(40 + "[...earlier trajectory omitted...]".length + 2);
+    expect(result.text).toContain("USER: task"); // start of the task intent survives
+    expect(result.text).not.toContain("TOOL: read(x)"); // no room left for a tail
   });
 });
 

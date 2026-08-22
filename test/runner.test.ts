@@ -256,6 +256,28 @@ describe("ShadowRunner.run integration", () => {
     expect(result.error).toMatch(/exceeds test\/model context window \(100000\)/);
   });
 
+  it("rejects unicode-heavy trajectories that chars/4 would underestimate", async () => {
+    const runner = new ShadowRunner();
+    // 300k CJK chars ≈ 300k tokens, far over the 100k window, but only 75k
+    // under the old chars/4 estimate.
+    const result = await runner.run(makeRequest({
+      messages: [{ role: "user", content: [{ type: "text", text: "测".repeat(300000) }] }],
+    }));
+    expect(result.reason).toBe("error");
+    expect(result.error).toMatch(/exceeds test\/model context window \(100000\)/);
+  });
+
+  it("counts the inherited system prompt against the context budget", async () => {
+    const runner = new ShadowRunner();
+    // Trajectory alone fits (~30k tokens), but a 400k-char system prompt does not.
+    const result = await runner.run(makeRequest({
+      mainSystemPrompt: "s".repeat(400000),
+      messages: [{ role: "user", content: [{ type: "text", text: "x".repeat(100000) }] }],
+    }));
+    expect(result.reason).toBe("error");
+    expect(result.error).toMatch(/exceeds test\/model context window \(100000\)/);
+  });
+
   it("treats an empty report as silence instead of delivering it", async () => {
     const runner = new ShadowRunner();
     const onReport = vi.fn();

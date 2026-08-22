@@ -42,7 +42,18 @@ describe("selectCandidates", () => {
     const result = selectCandidates({ shadows, activeShadowIds: new Set(["a"]), mainModelId: "m/1" });
     expect(result.candidates.map((s) => s.id)).toEqual(["c"]);
     expect(result.runningExcluded).toEqual(["a"]);
-    expect(result.modelFiltered).toEqual(["b"]);
+    expect(result.disabled).toEqual(["b"]);
+    expect(result.modelFiltered).toEqual([]);
+  });
+
+  it("reports disabled and model-mismatched shadows in separate buckets", () => {
+    const shadows = [
+      { ...base, id: "off", enabled: false },
+      { ...base, id: "wrongmodel", activeForModels: ["other/1"] },
+    ];
+    const result = selectCandidates({ shadows, activeShadowIds: new Set(), mainModelId: "m/1" });
+    expect(result.disabled).toEqual(["off"]);
+    expect(result.modelFiltered).toEqual(["wrongmodel"]);
   });
 
   it("returns everything when nothing is excluded", () => {

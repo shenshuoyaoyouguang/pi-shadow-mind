@@ -188,7 +188,12 @@ export class ShadowMindRuntime {
       mainModelId: fullModelId,
     });
     if (!selection.candidates.length) {
-      this.record("heartbeat-skipped", { reason: "no-candidates", modelCalls: this.modelCalls, ...(selection.modelFiltered.length ? { modelFiltered: selection.modelFiltered } : {}) });
+      this.record("heartbeat-skipped", {
+        reason: "no-candidates",
+        modelCalls: this.modelCalls,
+        ...(selection.disabled.length ? { disabled: selection.disabled } : {}),
+        ...(selection.modelFiltered.length ? { modelFiltered: selection.modelFiltered } : {}),
+      });
       return;
     }
 
@@ -229,6 +234,7 @@ export class ShadowMindRuntime {
       activated: activated.map(({ shadow, brief }) => ({ id: shadow.id, brief })),
       candidates: selection.candidates.map((shadow) => shadow.id),
       ...(outcome.truncated ? { truncated: true } : {}),
+      ...(selection.disabled.length ? { disabled: selection.disabled } : {}),
       ...(selection.modelFiltered.length ? { modelFiltered: selection.modelFiltered } : {}),
       ...(selection.runningExcluded.length ? { runningExcluded: selection.runningExcluded } : {}),
     });
@@ -406,6 +412,9 @@ export class ShadowMindRuntime {
     this.paused = paused;
     if (paused) {
       this.heartbeatEpoch += 1;
+      // Pausing invalidates the heartbeat just like new user input: the
+      // in-flight gatekeeper call is aborted instead of running out its window.
+      this.heartbeatAbort?.abort();
       this.abortAll("paused");
       // Invalidate results accepted around the pause so nothing can re-arm the
       // batch window in the microtask gap and deliver after resume.

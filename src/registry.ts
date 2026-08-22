@@ -103,7 +103,9 @@ export function parseShadowMarkdown(source: string, filePath: string): ShadowDef
   if (!ID_PATTERN.test(id)) throw new Error("id must match [a-z0-9][a-z0-9_-]*");
   const prompt = match[2].trim();
   if (!prompt) throw new Error("shadow prompt body is empty");
-  const extraFields: Record<string, unknown> = {};
+  // Null prototype: a plain object would route a `__proto__` key through the
+  // inherited setter and silently drop it from the serialized frontmatter.
+  const extraFields: Record<string, unknown> = Object.create(null);
   for (const [key, val] of Object.entries(value)) {
     if (!KNOWN_SHADOW_KEYS.has(key)) extraFields[key] = val;
   }

@@ -38,7 +38,9 @@ export function parseConfig(input: unknown): ShadowConfig {
   if (!isThinkingLevel(thinking)) {
     throw new Error("default_thinking_level is invalid");
   }
-  const extraFields: Record<string, unknown> = {};
+  // Null prototype: a plain object would route a `__proto__` key through the
+  // inherited setter and silently drop it from the serialized config.
+  const extraFields: Record<string, unknown> = Object.create(null);
   for (const [key, val] of Object.entries(value)) {
     if (!KNOWN_CONFIG_KEYS.has(key)) extraFields[key] = val;
   }

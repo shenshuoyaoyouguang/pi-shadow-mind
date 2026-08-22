@@ -83,8 +83,8 @@ describe("management-tools persistence defects", () => {
   it("#13 sanitizedError strips absolute paths from store EEXIST", async () => {
     const rawStore: any = {
       create: async () => {
-        // Simulate EntityStore after fix would already be clean, but test sanitization layer
-        throw new Error("shadow 'dup' already exists");
+        // Real Node fs EEXIST shape: the absolute path rides in the message.
+        throw new Error("EEXIST: file already exists, open '/tmp/pi-shadow-mind-agent/shadow-minds/dup.md'");
       },
       list: async () => [{ id: "dup" }],
       update: async () => { throw new Error("shadow 'dup' already exists"); },
@@ -94,8 +94,64 @@ describe("management-tools persistence defects", () => {
       writeConfig: async () => {},
     };
     const tools = collectTools(rawStore, () => ({ maxParallelShadows: 2, defaultShadowTimeoutSeconds: 300, headlessDrainTimeoutSeconds: 120, resultBatchWindowMs: 400, defaultThinkingLevel: "low" } as any));
-    const upd = tools.get("update_shadow")!;
-    await expect(upd.execute("id2", { id: "dup", prompt: "new" } as any, undefined, undefined, mockCtx())).rejects.toThrow(/shadow 'dup' already exists/);
+    const create = tools.get("create_shadow")!;
+    try {
+      await create.execute("id2", { id: "dup", prompt: "new" } as any, undefined, undefined, mockCtx());
+      expect.fail("should have thrown");
+    } catch (e: any) {
+      const msg = e instanceof Error ? e.message : String(e);
+      expect(msg).toContain("<path>");
+      expect(msg).not.toContain("/tmp/pi-shadow-mind-agent");
+      expect(msg).toContain("EEXIST");
+    }
+  });
+
+  it("sanitizedError redacts UNC paths", async () => {
+    const uncStore: any = {
+      create: async () => {
+        throw new Error("ENOENT: no such file or directory, open '\\\\fileserver\\share\\shadow-minds\\x.md'");
+      },
+      list: async () => [],
+      update: async () => {},
+      setEnabled: async () => {},
+      delete: async () => {},
+      readConfig: async () => "",
+      writeConfig: async () => {},
+    };
+    const tools = collectTools(uncStore, () => ({} as any));
+    const create = tools.get("create_shadow")!;
+    await expect(create.execute("id", { id: "myid", prompt: "hello" } as any, undefined, undefined, mockCtx())).rejects.toSatisfy((e: unknown) => {
+      const msg = e instanceof Error ? e.message : String(e);
+      expect(msg).toContain("<path>");
+      expect(msg).not.toContain("fileserver");
+      expect(msg).not.toContain("share");
+      expect(msg).toContain("ENOENT");
+      return true;
+    });
+  });
+
+  it("sanitizedError redacts quoted POSIX paths that contain spaces", async () => {
+    const posixStore: any = {
+      create: async () => {
+        throw new Error("EEXIST: file already exists, open '/tmp/my shadow dir/dup.md'");
+      },
+      list: async () => [],
+      update: async () => {},
+      setEnabled: async () => {},
+      delete: async () => {},
+      readConfig: async () => "",
+      writeConfig: async () => {},
+    };
+    const tools = collectTools(posixStore, () => ({} as any));
+    const create = tools.get("create_shadow")!;
+    await expect(create.execute("id", { id: "myid", prompt: "hello" } as any, undefined, undefined, mockCtx())).rejects.toSatisfy((e: unknown) => {
+      const msg = e instanceof Error ? e.message : String(e);
+      expect(msg).toContain("<path>");
+      expect(msg).not.toContain("my shadow dir");
+      expect(msg).not.toContain("dup.md");
+      expect(msg).toContain("EEXIST");
+      return true;
+    });
   });
 
   it("sanitizedError redacts Windows backslash paths", async () => {
@@ -195,6 +251,29 @@ describe("management-tools persistence defects", () => {
       expect(onDisk.max_parallel_shadows).toBe(3);
       expect(onDisk.heartbeat_probability).toBe(0.25);
       expect(onDisk.custom_key).toBe("preserved");
+    } finally {
+      await rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("update_shadow_config clears a model override with an explicit null", async () => {
+    const agentDir = await mkdtemp(join(tmpdir(), "pi-shadow-mind-mgmt-"));
+    try {
+      const configStore = new ConfigStore(agentDir);
+      await configStore.initialize();
+      const configPath = configStore.configPath;
+      await writeFile(configPath, `${JSON.stringify({ gatekeeper_model: "test/gk", default_shadow_model: "test/shadow" }, null, 2)}\n`, "utf8");
+      const { config: current } = await configStore.reload();
+      expect(current.gatekeeperModel).toBe("test/gk");
+      const registry = new ShadowRegistry(agentDir);
+      const store = new EntityStore(registry, configPath);
+      const tools = collectTools(store, () => current);
+      const tool = tools.get("update_shadow_config")!;
+      expect(Value.Check((tool as any).parameters, { gatekeeper_model: null })).toBe(true);
+      await tool.execute("id", { gatekeeper_model: null } as any, undefined, undefined, mockCtx());
+      const onDisk = JSON.parse(await readFile(configPath, "utf8"));
+      expect(onDisk.gatekeeper_model).toBeUndefined(); // key removed, back to the fallback chain
+      expect(onDisk.default_shadow_model).toBe("test/shadow"); // untouched sibling survives
     } finally {
       await rm(agentDir, { recursive: true, force: true });
     }

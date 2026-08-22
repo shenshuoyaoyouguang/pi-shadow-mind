@@ -12,6 +12,15 @@ describe("summarizeToolResult", () => {
     expect(summary).toBe(`1 read · ${"x".repeat(200)}…`);
   });
 
+  it("never splits an astral character at the preview boundary", () => {
+    // 1 ASCII + 200 astral chars = 201 code points (401 UTF-16 units); a raw
+    // slice(0, 200) would cut a surrogate pair in half at the 200-unit boundary.
+    const summary = summarizeToolResult({ toolName: "read", content: [{ type: "text", text: `x${"𝄞".repeat(200)}` }], isError: false });
+    const preview = summary.slice(summary.indexOf("· ") + 2);
+    expect(Array.from(preview)).toHaveLength(201); // 200 kept code points + ellipsis
+    expect(Array.from(preview).every((char) => char === "x" || char === "𝄞" || char === "…")).toBe(true);
+  });
+
   it("keeps zero-line handling for empty read results", () => {
     const summary = summarizeToolResult({ toolName: "read", content: [{ type: "text", text: "" }], isError: false });
     expect(summary).toBe("0 read");
