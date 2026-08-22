@@ -9,6 +9,8 @@ export interface ShadowConfig {
   headlessDrainTimeoutSeconds: number;
   resultBatchWindowMs: number;
   defaultShadowModel?: string;
+  /** Gatekeeper model full id; omitted → defaultShadowModel → main model. */
+  gatekeeperModel?: string;
   defaultThinkingLevel: ThinkingLevel;
   randomSeed?: number;
   extraFields?: Record<string, unknown>;
