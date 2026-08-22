@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decideHeartbeat, matchesModel, shouldEvaluateHeartbeat } from "../src/scheduler.js";
+import { decideHeartbeat, matchesModel, selectCandidates, shouldEvaluateHeartbeat } from "../src/scheduler.js";
 import type { ShadowDefinition } from "../src/types.js";
 
 const shadow = (id: string, probability = 1): ShadowDefinition => ({
@@ -80,5 +80,26 @@ describe("matchesModel", () => {
     const scoped = { ...shadow("a"), activeForModels: ["anthropic/claude"] };
     expect(matchesModel(scoped, "openai/gpt")).toBe(false);
     expect(matchesModel({ ...scoped, activeForModels: ["openai/gpt"] }, "openai/gpt")).toBe(true);
+  });
+});
+
+describe("selectCandidates", () => {
+  const base = { name: "n", prompt: "p", filePath: "f", enabled: true, activeForModels: ["*"] } as any;
+
+  it("keeps enabled, non-running, model-matching shadows", () => {
+    const shadows = [
+      { ...base, id: "a" },
+      { ...base, id: "b", enabled: false },
+      { ...base, id: "c", activeForModels: ["m/1"] },
+    ];
+    const result = selectCandidates({ shadows, activeShadowIds: new Set(["a"]), mainModelId: "m/1" });
+    expect(result.candidates.map((s) => s.id)).toEqual(["c"]);
+    expect(result.runningExcluded).toEqual(["a"]);
+    expect(result.modelFiltered).toEqual(["b"]);
+  });
+
+  it("returns everything when nothing is excluded", () => {
+    const result = selectCandidates({ shadows: [{ ...base, id: "x" }], activeShadowIds: new Set(), mainModelId: "m/1" });
+    expect(result.candidates.map((s) => s.id)).toEqual(["x"]);
   });
 });
