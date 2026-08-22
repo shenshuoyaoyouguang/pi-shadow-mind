@@ -66,7 +66,7 @@ describe("management-tools persistence defects", () => {
       readConfig: async () => "",
       writeConfig: async () => {},
     };
-    const tools = collectTools(store, () => ({ heartbeatProbability: 1/3, maxParallelShadows: 2, defaultShadowTimeoutSeconds: 300, headlessDrainTimeoutSeconds: 120, resultBatchWindowMs: 400, defaultThinkingLevel: "low" } as any));
+    const tools = collectTools(store, () => ({ maxParallelShadows: 2, defaultShadowTimeoutSeconds: 300, headlessDrainTimeoutSeconds: 120, resultBatchWindowMs: 400, defaultThinkingLevel: "low" } as any));
     const create = tools.get("create_shadow")!;
     try {
       await create.execute("id1", { id: "myid", prompt: "hello" } as any, undefined, undefined, mockCtx());
@@ -93,7 +93,7 @@ describe("management-tools persistence defects", () => {
       readConfig: async () => "{}",
       writeConfig: async () => {},
     };
-    const tools = collectTools(rawStore, () => ({ heartbeatProbability: 1/3, maxParallelShadows: 2, defaultShadowTimeoutSeconds: 300, headlessDrainTimeoutSeconds: 120, resultBatchWindowMs: 400, defaultThinkingLevel: "low" } as any));
+    const tools = collectTools(rawStore, () => ({ maxParallelShadows: 2, defaultShadowTimeoutSeconds: 300, headlessDrainTimeoutSeconds: 120, resultBatchWindowMs: 400, defaultThinkingLevel: "low" } as any));
     const upd = tools.get("update_shadow")!;
     await expect(upd.execute("id2", { id: "dup", prompt: "new" } as any, undefined, undefined, mockCtx())).rejects.toThrow(/shadow 'dup' already exists/);
   });
@@ -167,6 +167,14 @@ describe("management-tools persistence defects", () => {
     const update = collectTools(upd, () => ({} as any)).get("update_shadow")!;
     await expect(update.execute("id", { id: "dup", prompt: "x" } as any, undefined, undefined, mockCtx())).rejects.toThrow("ratio 1/2 must be in [0,1]");
     expect(tools.get("list_shadows")).toBeDefined();
+  });
+
+  it("#15 update_shadow_config schema drops deprecated scheduling fields", () => {
+    const tools = collectTools({} as any, () => ({} as any));
+    const cfg = tools.get("update_shadow_config")!;
+    const schema: any = cfg.parameters;
+    expect(schema.properties.heartbeat_probability).toBeUndefined();
+    expect(schema.properties.random_seed).toBeUndefined();
   });
 
   it("update_shadow_config preserves unknown config keys across the round-trip", async () => {

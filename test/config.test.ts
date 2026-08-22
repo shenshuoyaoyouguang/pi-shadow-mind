@@ -7,14 +7,26 @@ describe("parseConfig", () => {
     expect(DEFAULT_CONFIG.defaultShadowTimeoutSeconds).toBe(300);
   });
 
-  it("rejects invalid probability", () => {
-    expect(() => parseConfig({ heartbeat_probability: 2 })).toThrow(/heartbeat_probability/);
+  it("parses gatekeeper_model and tolerates deprecated keys via extraFields", () => {
+    const config = parseConfig({
+      gatekeeper_model: "zhipu/glm-4.7-flash",
+      heartbeat_probability: 0.9,
+      random_seed: 7,
+    });
+    expect(config.gatekeeperModel).toBe("zhipu/glm-4.7-flash");
+    expect(config.extraFields?.heartbeat_probability).toBe(0.9);
+    expect(config.extraFields?.random_seed).toBe(7);
   });
 
-  it("accepts a deterministic benchmark seed", () => {
-    expect(parseConfig({ random_seed: 42 }).randomSeed).toBe(42);
-    expect(() => parseConfig({ random_seed: -1 })).toThrow(/random_seed/);
-    expect(() => parseConfig({ random_seed: 1.5 })).toThrow(/random_seed/);
+  it("round-trips deprecated keys without writing them as known fields", () => {
+    const text = serializeConfig(parseConfig({ heartbeat_probability: 0.5 }));
+    expect(text).not.toContain('"heartbeat_probability": 0.5,\n    "max_parallel_shadows"');
+    const reparsed = parseConfig(JSON.parse(text));
+    expect(reparsed.extraFields?.heartbeat_probability).toBe(0.5);
+  });
+
+  it("rejects an invalid gatekeeper_model", () => {
+    expect(() => parseConfig({ gatekeeper_model: "   " })).toThrow(/gatekeeper_model/);
   });
 
   it("#11 preserves unknown config keys across round-trip", () => {

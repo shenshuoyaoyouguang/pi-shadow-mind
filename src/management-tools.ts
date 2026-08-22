@@ -103,14 +103,12 @@ function configReadTool(store: EntityStore): ToolDefinition {
 
 function configWriteTool(store: EntityStore, getConfig: () => ShadowConfig): ToolDefinition {
   return tool("update_shadow_config", "Update Shadow Config", "Update global Shadow Mind runtime configuration after user confirmation.", Type.Object({
-    heartbeat_probability: Type.Optional(Type.Number({ minimum: 0, maximum: 1 })),
     max_parallel_shadows: Type.Optional(Type.Integer({ minimum: 1 })),
     default_shadow_timeout_seconds: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
     headless_drain_timeout_seconds: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
     result_batch_window_ms: Type.Optional(Type.Integer({ minimum: 0 })),
     default_shadow_model: Type.Optional(Type.String()),
     default_thinking_level: Type.Optional(THINKING),
-    random_seed: Type.Optional(Type.Integer({ minimum: 0, maximum: 0xffff_ffff })),
   }), async (_id, params, _signal, _update, ctx) => {
     try {
       const current = getConfig();
@@ -118,14 +116,12 @@ function configWriteTool(store: EntityStore, getConfig: () => ShadowConfig): Too
       const next = parseConfig({
         // Unknown keys from the current file must survive the round-trip.
         ...(current.extraFields ?? {}),
-        heartbeat_probability: raw.heartbeat_probability ?? current.heartbeatProbability,
         max_parallel_shadows: raw.max_parallel_shadows ?? current.maxParallelShadows,
         default_shadow_timeout_seconds: raw.default_shadow_timeout_seconds ?? current.defaultShadowTimeoutSeconds,
         headless_drain_timeout_seconds: raw.headless_drain_timeout_seconds ?? current.headlessDrainTimeoutSeconds,
         result_batch_window_ms: raw.result_batch_window_ms ?? current.resultBatchWindowMs,
         default_shadow_model: raw.default_shadow_model ?? current.defaultShadowModel,
         default_thinking_level: raw.default_thinking_level ?? current.defaultThinkingLevel,
-        random_seed: raw.random_seed ?? current.randomSeed,
       });
       if (!(await confirm(ctx, "Update Shadow Config", `Apply this config?\n${JSON.stringify(next, null, 2)}`))) return textResult("Cancelled.");
       await store.writeConfig(next);

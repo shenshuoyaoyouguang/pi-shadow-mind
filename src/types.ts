@@ -3,7 +3,6 @@ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 export const DEFAULT_READ_TOOLS = ["read", "grep", "find", "ls"] as const;
 
 export interface ShadowConfig {
-  heartbeatProbability: number;
   maxParallelShadows: number;
   defaultShadowTimeoutSeconds: number;
   headlessDrainTimeoutSeconds: number;
@@ -12,7 +11,6 @@ export interface ShadowConfig {
   /** Gatekeeper model full id; omitted → defaultShadowModel → main model. */
   gatekeeperModel?: string;
   defaultThinkingLevel: ThinkingLevel;
-  randomSeed?: number;
   extraFields?: Record<string, unknown>;
 }
 

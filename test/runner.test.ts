@@ -114,7 +114,7 @@ let promptError: Error | undefined;
 function makeRequest(overrides: Partial<ShadowRunRequest> = {}): ShadowRunRequest {
   return {
     shadow: { id: "s", name: "S", enabled: true, debug: false, activationProbability: 0.5, activeForModels: ["*"], tools: [], prompt: "test", filePath: "s.md" },
-    config: { heartbeatProbability: 1 / 3, maxParallelShadows: 2, defaultShadowTimeoutSeconds: 60, headlessDrainTimeoutSeconds: 120, resultBatchWindowMs: 400, defaultThinkingLevel: "low" },
+    config: { maxParallelShadows: 2, defaultShadowTimeoutSeconds: 60, headlessDrainTimeoutSeconds: 120, resultBatchWindowMs: 400, defaultThinkingLevel: "low" },
     epoch: 1,
     runId: "run-1",
     cwd: tmp,
