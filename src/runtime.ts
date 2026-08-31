@@ -18,18 +18,6 @@ import { SessionLifetime } from "./session-lifetime.js";
 import { ShadowRunner, resolveShadowTools, type ShadowRunResult } from "./shadow-runner.js";
 import { waitForSettled } from "./shutdown-drain.js";
 import type { RuntimeEvent, ShadowDefinition, ShadowReport } from "./types.js";
-import { UsageStore } from "./usage-store.js";
-import {
-  addUsage,
-  formatUsageCost,
-  formatUsageDetail,
-  formatUsageSummary,
-  formatUsageTokens,
-  zeroUsage,
-  type ShadowUsage,
-} from "./usage.js";
-
-const SESSION_TEARDOWN_TIMEOUT_MS = 1_000;
 
 export class ShadowMindRuntime {
   private readonly agentDir = getAgentDir();
@@ -37,10 +25,8 @@ export class ShadowMindRuntime {
   private readonly registry = new ShadowRegistry(this.agentDir);
   private readonly entityStore = new EntityStore(this.registry, this.configStore.configPath);
   private readonly runner = new ShadowRunner();
-  private readonly usageStore = new UsageStore(this.agentDir);
   private readonly active = new Map<string, { shadow: ShadowDefinition; epoch: number }>();
   private readonly recentEvents: RuntimeEvent[] = [];
-  private readonly recentRuns: Array<{ shadowName: string; completedAt: string; result: ShadowRunResult }> = [];
   private readonly batcher: ReportBatcher;
   private readonly sessionLifetime = new SessionLifetime();
   private epoch = 0;
@@ -49,7 +35,6 @@ export class ShadowMindRuntime {
   private panelVisible = false;
   private latestContext?: ExtensionContext;
   private diagnostics: string[] = [];
-  private sessionUsage: ShadowUsage = zeroUsage();
   private shadowCount = 0;
   private random: () => number = Math.random;
 
@@ -68,10 +53,7 @@ export class ShadowMindRuntime {
       this.sessionLifetime.activate();
       this.latestContext = ctx;
       this.modelCalls = 0;
-      this.sessionUsage = zeroUsage();
-      this.recentRuns.length = 0;
       await this.configStore.initialize();
-      await this.usageStore.initialize();
       this.random = createRandom(this.configStore.current.randomSeed);
       await this.registry.initialize();
       await this.refresh(ctx);
@@ -107,14 +89,6 @@ export class ShadowMindRuntime {
       }
       this.epoch += 1;
       this.abortAll("session-shutdown");
-      if (this.active.size > 0) {
-        const result = await waitForSettled({
-          timeoutMs: SESSION_TEARDOWN_TIMEOUT_MS,
-          isSettled: () => this.active.size === 0,
-        });
-        if (!result.settled) this.active.clear();
-      }
-      await this.usageStore.flush();
       ctx.ui.setStatus("shadow-mind", undefined);
       ctx.ui.setWidget("shadow-mind-panel", undefined);
       this.sessionLifetime.deactivate();
@@ -240,18 +214,9 @@ export class ShadowMindRuntime {
   }
 
   private handleRunEnd(runId: string, shadow: ShadowDefinition, result: ShadowRunResult): void {
-    const activeRun = this.active.get(runId);
     this.active.delete(runId);
-    const persisted = this.usageStore.add(result.usage);
-    if (activeRun?.epoch !== this.epoch) return;
-    this.sessionUsage = addUsage(this.sessionUsage, result.usage);
-    this.recentRuns.push({ shadowName: shadow.name, completedAt: new Date().toISOString(), result });
-    if (this.recentRuns.length > 5) this.recentRuns.shift();
     this.record("run-end", { runId, shadowId: shadow.id, ...result });
     if (this.latestContext && this.sessionLifetime.isActive) this.updateStatus(this.latestContext);
-    void persisted.then(() => {
-      if (this.latestContext && this.sessionLifetime.isActive) this.updateStatus(this.latestContext);
-    });
   }
 
   private acceptReport(report: ShadowReport): void {
@@ -327,10 +292,8 @@ export class ShadowMindRuntime {
 
   private updateStatus(ctx: ExtensionContext): void {
     this.sessionLifetime.run(() => {
-      const diagnostics = this.usageStore.error ? [...this.diagnostics, `usage: ${this.usageStore.error}`] : this.diagnostics;
-      const warning = diagnostics.length || this.hasRecentRunErrors() ? " !" : "";
-      const usage = `${formatUsageTokens(this.sessionUsage.totalTokens)} · ${formatUsageCost(this.sessionUsage.cost.total)}`;
-      ctx.ui.setStatus("shadow-mind", this.paused ? `🐙 Paused · ${usage}${warning}` : `🐙 ${this.active.size} · ${usage}${warning}`);
+      const warning = this.diagnostics.length || this.hasRecentRunErrors() ? " !" : "";
+      ctx.ui.setStatus("shadow-mind", this.paused ? `🐙 Paused${warning}` : `🐙 ${this.active.size}${warning}`);
       if (this.panelVisible) ctx.ui.setWidget("shadow-mind-panel", this.statusLines(), { placement: "aboveEditor" });
     });
   }
@@ -341,17 +304,10 @@ export class ShadowMindRuntime {
 
   private statusLines(): string[] {
     const config = this.configStore.current;
-    const diagnostics = this.usageStore.error ? [...this.diagnostics, `usage: ${this.usageStore.error}`] : this.diagnostics;
     return [
       `🐙 Shadow Mind · ${this.paused ? "paused" : "active"} · running ${this.active.size}/${config.maxParallelShadows}`,
       `heartbeat ${formatNumber(config.heartbeatProbability)} · batch ${config.resultBatchWindowMs}ms · timeout ${config.defaultShadowTimeoutSeconds}s · drain ${config.headlessDrainTimeoutSeconds}s · thinking ${config.defaultThinkingLevel}`,
       `definitions: ${this.shadowCount} valid · ${this.diagnostics.length} invalid`,
-      formatUsageDetail("session", this.sessionUsage),
-      `usage lifetime · ${formatUsageSummary(this.usageStore.current)}`,
-      ...this.recentRuns.slice(-3).map(({ shadowName, completedAt, result }) => (
-        `recent run · ${formatCompletedAt(completedAt)} · ${shadowName} · ${result.reason} · ${formatUsageSummary(result.usage)}`
-      )),
-      ...diagnostics.map((diagnostic) => `diagnostic: ${diagnostic}`),
       ...this.recentEvents.slice(-5).map((event) => {
         const failed = event.kind === "run-end" && (event.data?.reason === "error" || event.data?.reason === "timeout");
         const detail = failed ? ` ${event.data?.error ?? event.data?.reason}` : "";
@@ -360,7 +316,6 @@ export class ShadowMindRuntime {
       "Shortcut: Alt+S toggle · Commands: /shadow toggle | pause | resume | status | hide",
     ];
   }
-
 }
 
 function resolveModel(ctx: ExtensionContext, fullId: string) {
@@ -371,13 +326,4 @@ function resolveModel(ctx: ExtensionContext, fullId: string) {
 
 function formatNumber(value: number): string {
   return Number(value.toFixed(3)).toString();
-}
-
-function formatCompletedAt(completedAt: string): string {
-  return new Date(completedAt).toLocaleTimeString("en-GB", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hourCycle: "h23",
-  });
 }

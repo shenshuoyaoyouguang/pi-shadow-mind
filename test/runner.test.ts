@@ -35,26 +35,12 @@ const mock = vi.hoisted(() => {
 
     async prompt(): Promise<void> {
       if (this.behavior === "hang") {
-        this.messages.push({
-          role: "assistant",
-          usage: {
-            input: 5, output: 3, cacheRead: 0, cacheWrite: 0, totalTokens: 8,
-            cost: { input: 0.005, output: 0.003, cacheRead: 0, cacheWrite: 0, total: 0.008 },
-          },
-        });
         await new Promise<void>((resolve, reject) => {
           this.release = (err) => (err ? reject(err) : resolve());
         });
         return;
       }
       if (this.behavior === "throw") {
-        this.messages.push({
-          role: "assistant",
-          usage: {
-            input: 2, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 3,
-            cost: { input: 0.002, output: 0.001, cacheRead: 0, cacheWrite: 0, total: 0.003 },
-          },
-        });
         throw this.promptError ?? new Error("prompt failed");
       }
       if (this.behavior === "report") {
@@ -65,21 +51,7 @@ const mock = vi.hoisted(() => {
       }
       if (this.behavior === "tools") {
         // Shadow's own tool calls, appended after the trajectory.
-        this.messages.push({
-          role: "assistant",
-          usage: {
-            input: 10, output: 20, cacheRead: 30, cacheWrite: 40, totalTokens: 100,
-            cost: { input: 0.01, output: 0.02, cacheRead: 0.03, cacheWrite: 0.04, total: 0.1 },
-          },
-        });
         this.messages.push({ role: "toolResult", toolName: "write", isError: false, toolCallId: "own-1" });
-        this.messages.push({
-          role: "assistant",
-          usage: {
-            input: 1, output: 2, cacheRead: 3, cacheWrite: 4, totalTokens: 10,
-            cost: { input: 0.001, output: 0.002, cacheRead: 0.003, cacheWrite: 0.004, total: 0.01 },
-          },
-        });
         this.messages.push({ role: "toolResult", toolName: "write", isError: true, toolCallId: "own-2" });
       }
     }
@@ -181,7 +153,7 @@ describe("ShadowRunner.run integration", () => {
     expect(session.disposed).toBe(true);
   });
 
-  it("counts each own assistant/tool round, excluding the injected trajectory", async () => {
+  it("counts only the shadow's own tool results, excluding the injected trajectory", async () => {
     const runner = new ShadowRunner();
     behavior = "tools";
     const result = await runner.run(makeRequest());
@@ -189,15 +161,6 @@ describe("ShadowRunner.run integration", () => {
     expect(result.toolCalls).toBe(2);
     expect(result.toolFailures).toBe(1);
     expect(result.toolStats).toEqual([{ tool: "write", calls: 2, failures: 1 }]);
-    expect(result.usage).toEqual({
-      requests: 2,
-      input: 11,
-      output: 22,
-      cacheRead: 33,
-      cacheWrite: 44,
-      totalTokens: 110,
-      cost: { input: 0.011, output: 0.022, cacheRead: 0.033, cacheWrite: 0.044, total: 0.11 },
-    });
   });
 
   it("reports missing tools that did not materialize in the session", async () => {
@@ -221,7 +184,6 @@ describe("ShadowRunner.run integration", () => {
     const session = mock.sessions[0];
     expect(result.reason).toBe("timeout");
     expect(result.durationMs).toBeGreaterThan(0);
-    expect(result.usage).toMatchObject({ requests: 1, totalTokens: 8, cost: { total: 0.008 } });
     expect(session.aborted).toBe(true);
     expect(onReport).not.toHaveBeenCalled();
   });
@@ -234,7 +196,6 @@ describe("ShadowRunner.run integration", () => {
     const session = mock.sessions[0];
     expect(result.reason).toBe("error");
     expect(result.error).toBe("boom");
-    expect(result.usage).toMatchObject({ requests: 1, totalTokens: 3, cost: { total: 0.003 } });
     expect(session.disposed).toBe(true);
   });
 
@@ -249,6 +210,5 @@ describe("ShadowRunner.run integration", () => {
     expect(result.reason).toBe("aborted");
     expect(session.aborted).toBe(true);
     expect(result.toolCalls).toBe(0);
-    expect(result.usage).toMatchObject({ requests: 1, totalTokens: 8, cost: { total: 0.008 } });
   });
 });

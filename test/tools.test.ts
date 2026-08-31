@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { buildRunResult, resolveRunThinkingLevel, resolveShadowTools, toolMetrics } from "../src/shadow-runner.js";
-import { zeroUsage } from "../src/usage.js";
 
 const fullRegistry = new Set(["read", "grep", "find", "ls", "write", "bash", "edit", "custom-tool", "report_to_main"]);
 
@@ -64,61 +63,12 @@ describe("buildRunResult", () => {
     expect(result.toolNames).toEqual(["read", "report_to_main"]);
   });
 
-  it("aggregates only post-baseline assistant usage, excluding messages without usage", () => {
-    const result = buildRunResult({
-      reason: "silent",
-      durationMs: 10,
-      session: {
-        messages: [
-          { role: "toolResult", toolName: "read", isError: false },
-          {
-            role: "assistant",
-            usage: {
-              input: 1000, output: 1000, cacheRead: 1000, cacheWrite: 1000, totalTokens: 4000,
-              cost: { input: 1, output: 1, cacheRead: 1, cacheWrite: 1, total: 4 },
-            },
-          },
-          {
-            role: "assistant",
-            usage: {
-              input: 10, output: 20, cacheRead: 30, cacheWrite: 40, totalTokens: 100,
-              cost: { input: 0.01, output: 0.02, cacheRead: 0.03, cacheWrite: 0.04, total: 0.1 },
-            },
-          },
-          { role: "assistant" },
-          {
-            role: "assistant",
-            usage: {
-              input: 1, output: 2, cacheRead: 3, cacheWrite: 4, totalTokens: 10,
-              cost: { input: 0.001, output: 0.002, cacheRead: 0.003, cacheWrite: 0.004, total: 0.01 },
-            },
-          },
-        ],
-        getActiveToolNames: () => [],
-      } as any,
-      baseMessageCount: 2,
-      missingTools: [],
-    });
-
-    expect(result.usage).toEqual({
-      requests: 2,
-      input: 11,
-      output: 22,
-      cacheRead: 33,
-      cacheWrite: 44,
-      totalTokens: 110,
-      cost: { input: 0.011, output: 0.022, cacheRead: 0.033, cacheWrite: 0.044, total: 0.11 },
-    });
-  });
-
-  it("always returns zero usage for early error results and omits the optional error field otherwise", () => {
+  it("omits the error field unless provided", () => {
     const ok = buildRunResult({ reason: "silent", durationMs: 0, session: undefined, baseMessageCount: 0, missingTools: [] });
     expect(ok.error).toBeUndefined();
     expect("error" in ok).toBe(false);
-    expect(ok.usage).toEqual(zeroUsage());
     const failed = buildRunResult({ reason: "error", error: "boom", durationMs: 0, session: undefined, baseMessageCount: 0, missingTools: [] });
     expect(failed.error).toBe("boom");
-    expect(failed.usage).toEqual(zeroUsage());
   });
 
   it("passes through the resolved thinking level", () => {
