@@ -70,7 +70,7 @@ export class UsageStore {
   private async load(): Promise<void> {
     try {
       const raw = await readFile(this.usagePath, "utf8");
-      this.lifetime = parseUsageDocument(JSON.parse(raw)).lifetime;
+      this.lifetime = parseUsageDocumentText(raw).lifetime;
       this.lastError = undefined;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -89,12 +89,37 @@ export class UsageStore {
     await mkdir(dirname(this.usagePath), { recursive: true });
     const releaseLock = await acquireUsageFileLock(this.usagePath);
     try {
-      const committed = addUsage(await readUsageLifetime(this.usagePath), delta);
+      const committed = addUsage(await this.readCommittedLifetime(), delta);
       await writeUsageDocument(this.usagePath, committed);
       this.pendingUsage = subtractUsage(this.pendingUsage, delta);
       this.lifetime = addUsage(committed, this.pendingUsage);
     } finally {
       await releaseLock();
+    }
+  }
+
+  /**
+   * Read the on-disk lifetime for a write. A file that exists but cannot be
+   * parsed (corrupt JSON, unsupported version) is treated as an empty
+   * aggregate so this write overwrites it — matching load()'s "start a new
+   * in-memory aggregate" contract; the unparsable content carries no usable
+   * data to lose, and lastError clears once the write succeeds. Read errors
+   * beyond parsing still propagate — the file may be transiently unreadable
+   * and retryable rather than safe to overwrite.
+   */
+  private async readCommittedLifetime(): Promise<ShadowUsage> {
+    let raw: string;
+    try {
+      raw = await readFile(this.usagePath, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return zeroUsage();
+      throw error;
+    }
+    try {
+      return parseUsageDocumentText(raw).lifetime;
+    } catch (error) {
+      if (error instanceof UsageDocumentError) return zeroUsage();
+      throw error;
     }
   }
 }
@@ -131,16 +156,6 @@ function isZeroUsage(usage: ShadowUsage): boolean {
     && usage.cost.total === 0;
 }
 
-async function readUsageLifetime(usagePath: string): Promise<ShadowUsage> {
-  try {
-    const raw = await readFile(usagePath, "utf8");
-    return parseUsageDocument(JSON.parse(raw)).lifetime;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return zeroUsage();
-    throw error;
-  }
-}
-
 async function writeUsageDocument(usagePath: string, lifetime: ShadowUsage): Promise<void> {
   const temporaryPath = `${usagePath}.${randomUUID()}.tmp`;
   try {
@@ -152,18 +167,32 @@ async function writeUsageDocument(usagePath: string, lifetime: ShadowUsage): Pro
   }
 }
 
+/** Distinguishes unparsable document content (recoverable) from IO failures. */
+export class UsageDocumentError extends Error {}
+
 function parseUsageDocument(input: unknown): UsageDocument {
   if (input === null || typeof input !== "object" || Array.isArray(input)) {
-    throw new Error("usage must be a JSON object");
+    throw new UsageDocumentError("usage must be a JSON object");
   }
   const value = input as { version?: unknown; lifetime?: unknown };
-  if (value.version !== USAGE_DOCUMENT_VERSION) throw new Error("usage version is unsupported");
+  if (value.version !== USAGE_DOCUMENT_VERSION) throw new UsageDocumentError("usage version is unsupported");
   return { version: USAGE_DOCUMENT_VERSION, lifetime: parseUsage(value.lifetime, "lifetime") };
+}
+
+/** Parse a raw file body; load() and the write path share this error surface. */
+function parseUsageDocumentText(raw: string): UsageDocument {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new UsageDocumentError("usage is not valid JSON");
+  }
+  return parseUsageDocument(parsed);
 }
 
 function parseUsage(input: unknown, name: string): ShadowUsage {
   if (input === null || typeof input !== "object" || Array.isArray(input)) {
-    throw new Error(`${name} must be an object`);
+    throw new UsageDocumentError(`${name} must be an object`);
   }
   const value = input as {
     requests?: unknown;
@@ -176,7 +205,7 @@ function parseUsage(input: unknown, name: string): ShadowUsage {
   };
   const cost = value.cost;
   if (cost === null || typeof cost !== "object" || Array.isArray(cost)) {
-    throw new Error(`${name}.cost must be an object`);
+    throw new UsageDocumentError(`${name}.cost must be an object`);
   }
   const costValue = cost as {
     input?: unknown;
@@ -204,13 +233,13 @@ function parseUsage(input: unknown, name: string): ShadowUsage {
 
 function nonNegativeNumber(value: unknown, name: string): number {
   if (!isFiniteNumber(value) || value < 0) {
-    throw new Error(`${name} must be a non-negative finite number`);
+    throw new UsageDocumentError(`${name} must be a non-negative finite number`);
   }
   return value;
 }
 
 function nonNegativeInteger(value: unknown, name: string): number {
   const number = nonNegativeNumber(value, name);
-  if (!Number.isSafeInteger(number)) throw new Error(`${name} must be a non-negative safe integer`);
+  if (!Number.isSafeInteger(number)) throw new UsageDocumentError(`${name} must be a non-negative safe integer`);
   return number;
 }

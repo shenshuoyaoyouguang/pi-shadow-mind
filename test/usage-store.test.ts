@@ -62,6 +62,30 @@ describe("UsageStore", () => {
     expect(store.error).toMatch(/unsupported/);
   });
 
+  it("replaces an unparsable lifetime document with the next successful write", async () => {
+    const path = join(agentDir, "shadow-minds", "usage.json");
+    await mkdir(join(agentDir, "shadow-minds"), { recursive: true });
+    await writeFile(path, "{not json at all");
+
+    const store = new UsageStore(agentDir);
+    await store.initialize();
+    expect(store.error).toMatch(/not valid JSON|unsupported/);
+
+    const added = usage({ requests: 1, input: 20, totalTokens: 20, cost: { input: 0.2, total: 0.2 } });
+    await store.add(added);
+    await store.flush();
+
+    expect(store.error).toBeUndefined();
+    const persisted = JSON.parse(await readFile(path, "utf8"));
+    expect(persisted.version).toBe(1);
+    expect(persisted.lifetime).toEqual(added);
+
+    const reloaded = new UsageStore(agentDir);
+    await reloaded.initialize();
+    expect(reloaded.current).toEqual(added);
+    expect(reloaded.error).toBeUndefined();
+  });
+
   it("persists lifetime data for a new store instance", async () => {
     const initial = new UsageStore(agentDir);
     await initial.initialize();
