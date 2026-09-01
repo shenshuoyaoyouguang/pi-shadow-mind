@@ -24,7 +24,6 @@ const shadow: ShadowDefinition = {
   name: "Review",
   enabled: true,
   debug: false,
-  activationProbability: 1,
   activeForModels: [],
   tools: [],
   prompt: "Review",

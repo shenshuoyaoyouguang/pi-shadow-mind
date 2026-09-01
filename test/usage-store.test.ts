@@ -143,7 +143,9 @@ describe("UsageStore", () => {
   });
 
   it("merges simultaneous additions from separate Node processes", async () => {
-    const writerInputs = [10, 20, 30, 40];
+    // Costs 0.25/0.5/0.75/1 are exact binary fractions, so the aggregate is
+    // 2.5 regardless of the order the writers flush in (0.1+0.2+0.3+0.4 is not).
+    const writerInputs = [25, 50, 75, 100];
     const writers = writerInputs.map((input, index) => spawn(
       process.execPath,
       [
@@ -164,11 +166,12 @@ describe("UsageStore", () => {
     await reloaded.initialize();
     expect(reloaded.current).toEqual(usage({
       requests: 4,
-      input: 100,
-      totalTokens: 100,
-      cost: { input: 1, total: 1 },
+      input: 250,
+      totalTokens: 250,
+      cost: { input: 2.5, total: 2.5 },
     }));
-  }, 15_000);
+    // vite-node child spawns are starved when the whole suite runs in parallel.
+  }, 60_000);
 });
 
 async function waitUntil(condition: () => boolean): Promise<void> {

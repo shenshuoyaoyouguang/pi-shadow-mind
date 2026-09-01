@@ -3,14 +3,15 @@ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 export const DEFAULT_READ_TOOLS = ["read", "grep", "find", "ls"] as const;
 
 export interface ShadowConfig {
-  heartbeatProbability: number;
   maxParallelShadows: number;
   defaultShadowTimeoutSeconds: number;
   headlessDrainTimeoutSeconds: number;
   resultBatchWindowMs: number;
   defaultShadowModel?: string;
+  /** Gatekeeper model full id; omitted → defaultShadowModel → main model. */
+  gatekeeperModel?: string;
   defaultThinkingLevel: ThinkingLevel;
-  randomSeed?: number;
+  extraFields?: Record<string, unknown>;
 }
 
 export interface ShadowDefinition {
@@ -18,7 +19,6 @@ export interface ShadowDefinition {
   name: string;
   enabled: boolean;
   debug: boolean;
-  activationProbability: number;
   activeForModels: string[];
   runWithModel?: string;
   thinkingLevel?: ThinkingLevel;
@@ -26,6 +26,8 @@ export interface ShadowDefinition {
   tools: string[];
   prompt: string;
   filePath: string;
+  /** Unknown frontmatter keys preserved verbatim across round-trips. */
+  extraFields?: Record<string, unknown>;
 }
 
 export interface RegistryDiagnostic {
@@ -53,14 +55,4 @@ export interface RuntimeEvent {
   kind: string;
   epoch: number;
   data?: Record<string, unknown>;
-}
-
-export interface HeartbeatDecision {
-  heartbeatRoll: number;
-  activated: Array<{ shadow: ShadowDefinition; roll: number }>;
-  candidates: Array<{ shadowId: string; roll: number; selected: boolean }>;
-  /** Shadow ids excluded because active_for_models did not match the main model. */
-  modelFiltered: string[];
-  /** Shadow ids excluded because the same shadow is already running. */
-  runningExcluded: string[];
 }

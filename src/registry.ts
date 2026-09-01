@@ -1,15 +1,28 @@
-import { mkdir, readFile, readdir, stat } from "node:fs/promises";
+import { lstat, mkdir, readFile, readdir, stat } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import YAML from "yaml";
 import type { RegistryDiagnostic, RegistrySnapshot, ShadowDefinition } from "./types.js";
-import { inRange, isFiniteNumber, isNonEmptyString, isStringArray, isThinkingLevel } from "./validation.js";
+import { isFiniteNumber, isNonEmptyString, isStringArray, isThinkingLevel } from "./validation.js";
 
 const ID_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
 
+const KNOWN_SHADOW_KEYS = new Set([
+  "id",
+  "name",
+  "enabled",
+  "debug",
+  "activation_probability",
+  "active_for_models",
+  "run_with_model",
+  "thinking_level",
+  "timeout_seconds",
+  "tools",
+]);
+
 export class ShadowRegistry {
   readonly directory: string;
-  private readonly cache = new Map<string, { mtimeMs: number; shadow?: ShadowDefinition; error?: string }>();
+  private readonly cache = new Map<string, { mtimeMs: number; size: number; shadow?: ShadowDefinition; error?: string }>();
 
   constructor(agentDir: string) {
     this.directory = join(agentDir, "shadow-minds");
@@ -28,21 +41,36 @@ export class ShadowRegistry {
     for (const name of names) {
       const filePath = join(this.directory, name);
       seen.add(filePath);
-      const fileStat = await stat(filePath);
-      const cached = this.cache.get(filePath);
-      if (cached && cached.mtimeMs === fileStat.mtimeMs) {
-        // Unchanged since last load: reuse the cached parse result.
-        if (cached.shadow) shadows.push(cached.shadow);
-        if (cached.error) diagnostics.push({ filePath, message: cached.error });
-        continue;
-      }
       try {
-        const definition = parseShadowMarkdown(await readFile(filePath, "utf8"), filePath);
-        this.cache.set(filePath, { mtimeMs: fileStat.mtimeMs, shadow: definition });
-        shadows.push(definition);
+        const fileStat = await stat(filePath);
+        const cached = this.cache.get(filePath);
+        if (cached && cached.mtimeMs === fileStat.mtimeMs && cached.size === fileStat.size) {
+          if (cached.shadow) shadows.push(cached.shadow);
+          if (cached.error) diagnostics.push({ filePath, message: cached.error });
+          continue;
+        }
+        try {
+          const definition = parseShadowMarkdown(await readFile(filePath, "utf8"), filePath);
+          this.cache.set(filePath, { mtimeMs: fileStat.mtimeMs, size: fileStat.size, shadow: definition });
+          shadows.push(definition);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          this.cache.set(filePath, { mtimeMs: fileStat.mtimeMs, size: fileStat.size, error: message });
+          diagnostics.push({ filePath, message });
+        }
       } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          try {
+            if ((await lstat(filePath)).isSymbolicLink()) {
+              diagnostics.push({ filePath, message: "dangling symbolic link" });
+            }
+          } catch {
+            // The entry may have been removed between readdir and stat/lstat.
+          }
+          this.cache.delete(filePath);
+          continue;
+        }
         const message = error instanceof Error ? error.message : String(error);
-        this.cache.set(filePath, { mtimeMs: fileStat.mtimeMs, error: message });
         diagnostics.push({ filePath, message });
       }
     }
@@ -75,12 +103,17 @@ export function parseShadowMarkdown(source: string, filePath: string): ShadowDef
   if (!ID_PATTERN.test(id)) throw new Error("id must match [a-z0-9][a-z0-9_-]*");
   const prompt = match[2].trim();
   if (!prompt) throw new Error("shadow prompt body is empty");
+  // Null prototype: a plain object would route a `__proto__` key through the
+  // inherited setter and silently drop it from the serialized frontmatter.
+  const extraFields: Record<string, unknown> = Object.create(null);
+  for (const [key, val] of Object.entries(value)) {
+    if (!KNOWN_SHADOW_KEYS.has(key)) extraFields[key] = val;
+  }
   return {
     id,
     name: stringValue(value.name, id, "name"),
     enabled: booleanValue(value.enabled, true, "enabled"),
     debug: booleanValue(value.debug, false, "debug"),
-    activationProbability: probabilityValue(value.activation_probability, 0.3, "activation_probability"),
     activeForModels: stringArray(value.active_for_models, ["*"], "active_for_models"),
     runWithModel: optionalString(value.run_with_model, "run_with_model"),
     thinkingLevel: optionalThinking(value.thinking_level),
@@ -88,6 +121,7 @@ export function parseShadowMarkdown(source: string, filePath: string): ShadowDef
     tools: stringArray(value.tools, [], "tools"),
     prompt,
     filePath,
+    ...(Object.keys(extraFields).length ? { extraFields } : {}),
   };
 }
 
@@ -102,11 +136,6 @@ function optionalString(value: unknown, name: string): string | undefined {
 function booleanValue(value: unknown, fallback: boolean, name: string): boolean {
   if (value === undefined) return fallback;
   if (typeof value !== "boolean") throw new Error(`${name} must be boolean`);
-  return value;
-}
-function probabilityValue(value: unknown, fallback: number, name: string): number {
-  if (value === undefined) return fallback;
-  if (!isFiniteNumber(value) || !inRange(value, 0, 1)) throw new Error(`${name} must be between 0 and 1`);
   return value;
 }
 function optionalPositiveNumber(value: unknown, name: string): number | undefined {

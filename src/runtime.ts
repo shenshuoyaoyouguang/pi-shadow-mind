@@ -9,13 +9,14 @@ import { Text } from "@earendil-works/pi-tui";
 import type { Model } from "@earendil-works/pi-ai";
 import { ConfigStore } from "./config.js";
 import { EntityStore } from "./entity-store.js";
+import { runGatekeeper, type GatekeeperOutcome } from "./gatekeeper.js";
 import { registerManagementTools } from "./management-tools.js";
 import { ShadowRegistry } from "./registry.js";
 import { ReportBatcher, formatReportBatch } from "./report-batcher.js";
-import { createRandom } from "./random.js";
-import { decideHeartbeat, shouldEvaluateHeartbeat } from "./scheduler.js";
+import { selectCandidates, shouldEvaluateHeartbeat } from "./scheduler.js";
 import { SessionLifetime } from "./session-lifetime.js";
 import { ShadowRunner, resolveShadowTools, type ShadowRunResult } from "./shadow-runner.js";
+import { serializeTrajectory } from "./trajectory.js";
 import { waitForSettled } from "./shutdown-drain.js";
 import type { RuntimeEvent, ShadowDefinition, ShadowReport } from "./types.js";
 import { UsageStore } from "./usage-store.js";
@@ -31,6 +32,8 @@ import {
 
 const SESSION_TEARDOWN_TIMEOUT_MS = 1_000;
 
+const ABORT_GRACE_MS = 5_000;
+
 export class ShadowMindRuntime {
   private readonly agentDir = getAgentDir();
   private readonly configStore = new ConfigStore(this.agentDir);
@@ -39,10 +42,14 @@ export class ShadowMindRuntime {
   private readonly runner = new ShadowRunner();
   private readonly usageStore = new UsageStore(this.agentDir);
   private readonly active = new Map<string, { shadow: ShadowDefinition; epoch: number }>();
+  private readonly watchdogs = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly recentEvents: RuntimeEvent[] = [];
   private readonly recentRuns: Array<{ shadowName: string; completedAt: string; result: ShadowRunResult }> = [];
+  private readonly gatekeeper: typeof runGatekeeper;
   private readonly batcher: ReportBatcher;
   private readonly sessionLifetime = new SessionLifetime();
+  private heartbeatChain: Promise<void> = Promise.resolve();
+  private heartbeatEpoch = 0;
   private epoch = 0;
   private modelCalls = 0;
   private paused = false;
@@ -51,9 +58,11 @@ export class ShadowMindRuntime {
   private diagnostics: string[] = [];
   private sessionUsage: ShadowUsage = zeroUsage();
   private shadowCount = 0;
-  private random: () => number = Math.random;
+  /** Aborts the in-flight gatekeeper call when new user input invalidates the heartbeat. */
+  private heartbeatAbort?: AbortController;
 
-  constructor(private readonly pi: ExtensionAPI) {
+  constructor(private readonly pi: ExtensionAPI, private readonly options: { abortGraceMs?: number; gatekeeper?: typeof runGatekeeper } = {}) {
+    this.gatekeeper = options.gatekeeper ?? runGatekeeper;
     this.batcher = new ReportBatcher(this.configStore.current.resultBatchWindowMs, (reports) => this.deliverReports(reports));
   }
 
@@ -72,16 +81,16 @@ export class ShadowMindRuntime {
       this.recentRuns.length = 0;
       await this.configStore.initialize();
       await this.usageStore.initialize();
-      this.random = createRandom(this.configStore.current.randomSeed);
       await this.registry.initialize();
       await this.refresh(ctx);
-      this.record("session-config", { randomSeed: this.configStore.current.randomSeed ?? "random" });
       this.updateStatus(ctx);
     });
 
     this.pi.on("input", (event, ctx) => {
       this.latestContext = ctx;
       if (event.source === "extension") return;
+      this.heartbeatAbort?.abort();
+      this.heartbeatEpoch += 1;
       this.epoch += 1;
       this.abortAll("new-user-input");
     });
@@ -105,6 +114,7 @@ export class ShadowMindRuntime {
       if (event.reason === "quit" && (ctx.mode === "print" || ctx.mode === "json")) {
         await this.drainHeadless(ctx);
       }
+      this.heartbeatEpoch += 1;
       this.epoch += 1;
       this.abortAll("session-shutdown");
       if (this.active.size > 0) {
@@ -168,40 +178,102 @@ export class ShadowMindRuntime {
     });
   }
 
-  private async onHeartbeat(ctx: ExtensionContext): Promise<void> {
+  /** Serialized so concurrent turn_end events cannot oversubscribe parallel slots. */
+  private onHeartbeat(ctx: ExtensionContext): Promise<void> {
+    const heartbeatEpoch = this.heartbeatEpoch;
+    const next = this.heartbeatChain.then(() => this.runHeartbeat(ctx, heartbeatEpoch));
+    this.heartbeatChain = next.catch(() => {});
+    // The chain swallows rejections so one failed heartbeat cannot poison the next;
+    // the caller still gets a settled promise, so Pi never sees an unhandled rejection.
+    return next.catch((error) => {
+      this.record("heartbeat-error", { error: error instanceof Error ? error.message : String(error) });
+    });
+  }
+
+  private async runHeartbeat(ctx: ExtensionContext, heartbeatEpoch: number): Promise<void> {
     await this.refresh(ctx);
+    if (heartbeatEpoch !== this.heartbeatEpoch) {
+      this.record("heartbeat-skipped", { reason: "stale-heartbeat", modelCalls: this.modelCalls });
+      return;
+    }
     if (this.paused || !ctx.model) {
       this.record("heartbeat-skipped", { reason: this.paused ? "paused" : "no-model", modelCalls: this.modelCalls });
       return;
     }
     const snapshot = await this.registry.load();
     const fullModelId = `${ctx.model.provider}/${ctx.model.id}`;
-    const decision = decideHeartbeat({
-      heartbeatProbability: this.configStore.current.heartbeatProbability,
-      availableSlots: Math.max(0, this.configStore.current.maxParallelShadows - this.active.size),
+    const availableSlots = Math.max(0, this.configStore.current.maxParallelShadows - this.active.size);
+    if (availableSlots <= 0) {
+      this.record("heartbeat-skipped", { reason: "no-slots", modelCalls: this.modelCalls });
+      return;
+    }
+    // Deterministic prefilter; the gatekeeper only ever sees shadows it could actually launch.
+    const selection = selectCandidates({
       shadows: snapshot.shadows,
       activeShadowIds: new Set([...this.active.values()].map(({ shadow }) => shadow.id)),
       mainModelId: fullModelId,
-      random: this.random,
     });
-    this.record("heartbeat", {
-      modelCalls: this.modelCalls,
-      roll: decision.heartbeatRoll,
-      candidates: decision.candidates,
-      activated: decision.activated.map(({ shadow, roll }) => ({ id: shadow.id, roll })),
-      ...(decision.modelFiltered.length ? { modelFiltered: decision.modelFiltered } : {}),
-      ...(decision.runningExcluded.length ? { runningExcluded: decision.runningExcluded } : {}),
-    });
-    if (!decision.activated.length) return;
+    if (!selection.candidates.length) {
+      this.record("heartbeat-skipped", {
+        reason: "no-candidates",
+        modelCalls: this.modelCalls,
+        ...(selection.disabled.length ? { disabled: selection.disabled } : {}),
+        ...(selection.modelFiltered.length ? { modelFiltered: selection.modelFiltered } : {}),
+      });
+      return;
+    }
 
     const context = buildSessionContext(ctx.sessionManager.getEntries(), ctx.sessionManager.getLeafId());
+    const trajectory = serializeTrajectory(context.messages as unknown as Record<string, unknown>[]);
+    const controller = new AbortController();
+    this.heartbeatAbort = controller;
+    let outcome: GatekeeperOutcome;
+    try {
+      outcome = await this.gatekeeper({
+        candidates: selection.candidates,
+        trajectory,
+        config: this.configStore.current,
+        mainModel: ctx.model,
+        mainThinkingLevel: ctx.thinkingLevel,
+        signal: controller.signal,
+        deps: {
+          resolveModel: (id) => resolveModel(ctx, id),
+          modelAuthOk: (model) => ctx.modelRegistry.hasConfiguredAuth(model) || ctx.modelRegistry.isUsingOAuth(model),
+        },
+      });
+    } finally {
+      this.heartbeatAbort = undefined;
+    }
+    if (heartbeatEpoch !== this.heartbeatEpoch) {
+      this.record("heartbeat-skipped", { reason: "stale-heartbeat", modelCalls: this.modelCalls });
+      return;
+    }
+    if (!outcome.ok) {
+      // Fail-closed: a broken gatekeeper must never fall back to blind scheduling.
+      this.record("gatekeeper-error", { error: outcome.error });
+      return;
+    }
+    const activated = outcome.activations.slice(0, availableSlots)
+      .map((activation) => ({ shadow: snapshot.shadows.find((shadow) => shadow.id === activation.id), brief: activation.brief }))
+      .filter((entry): entry is { shadow: ShadowDefinition; brief: string } => Boolean(entry.shadow));
+    this.record("gatekeeper-decision", {
+      activated: activated.map(({ shadow, brief }) => ({ id: shadow.id, brief })),
+      candidates: selection.candidates.map((shadow) => shadow.id),
+      ...(outcome.truncated ? { truncated: true } : {}),
+      ...(selection.disabled.length ? { disabled: selection.disabled } : {}),
+      ...(selection.modelFiltered.length ? { modelFiltered: selection.modelFiltered } : {}),
+      ...(selection.runningExcluded.length ? { runningExcluded: selection.runningExcluded } : {}),
+    });
+    if (!activated.length) return;
+
     const availableTools = new Set(this.pi.getAllTools().map((tool) => tool.name));
-    for (const { shadow } of decision.activated) {
-      this.launchShadow(ctx, shadow, ctx.model, fullModelId, context, availableTools);
+    for (const { shadow, brief } of activated) {
+      if (this.paused || heartbeatEpoch !== this.heartbeatEpoch) break;
+      this.launchShadow(ctx, shadow, ctx.model, fullModelId, context, availableTools, brief);
     }
   }
 
-  private launchShadow(ctx: ExtensionContext, shadow: ShadowDefinition, mainModel: Model<any>, fullModelId: string, context: ReturnType<typeof buildSessionContext>, availableTools: Set<string>): void {
+  private launchShadow(ctx: ExtensionContext, shadow: ShadowDefinition, mainModel: Model<any>, fullModelId: string, context: ReturnType<typeof buildSessionContext>, availableTools: Set<string>, brief?: string): void {
     const runId = randomUUID();
     const runEpoch = this.epoch;
     const { tools, missing } = resolveShadowTools(shadow.tools, availableTools);
@@ -227,19 +299,26 @@ export class ShadowMindRuntime {
       resolveModel: (id) => resolveModel(ctx, id),
       modelAuthOk: (model) => ctx.modelRegistry.hasConfiguredAuth(model) || ctx.modelRegistry.isUsingOAuth(model),
       mainThinkingLevel: ctx.thinkingLevel,
+      brief,
       onReport: (report) => this.acceptReport(report),
     }).then((result) => this.handleRunEnd(runId, shadow, result)).catch((error) => {
+      this.releaseWatchdog(runId);
       this.active.delete(runId);
-      this.record("run-end", {
-        runId,
-        shadowId: shadow.id,
-        reason: "error",
-        error: error instanceof Error ? error.message : String(error),
-      });
+      try {
+        this.record("run-end", {
+          runId,
+          shadowId: shadow.id,
+          reason: "error",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      } catch {
+        // Error-path logging must never escalate into an unhandled rejection.
+      }
     });
   }
 
   private handleRunEnd(runId: string, shadow: ShadowDefinition, result: ShadowRunResult): void {
+    this.releaseWatchdog(runId);
     const activeRun = this.active.get(runId);
     this.active.delete(runId);
     const persisted = this.usageStore.add(result.usage);
@@ -255,11 +334,12 @@ export class ShadowMindRuntime {
   }
 
   private acceptReport(report: ShadowReport): void {
-    if (report.epoch !== this.epoch) return;
+    if (this.paused || report.epoch !== this.epoch) return;
     this.batcher.add(report);
   }
 
   private async deliverReports(reports: ShadowReport[]): Promise<void> {
+    if (this.paused) return;
     const current = reports.filter((report) => report.epoch === this.epoch);
     if (!current.length) return;
     const content = formatReportBatch(current);
@@ -289,8 +369,49 @@ export class ShadowMindRuntime {
 
   private abortAll(reason: string): void {
     this.runner.abortAll();
-    this.batcher.clear();
+    const dropped = this.batcher.clear();
     this.record("runs-aborted", { reason, count: this.active.size });
+    if (dropped > 0) this.record("reports-dropped", { reason, count: dropped });
+    for (const runId of this.active.keys()) this.armWatchdog(runId);
+  }
+
+  /**
+   * An aborted session whose waitForIdle never settles would leak its active
+   * entry and permanently reduce the parallel quota. After the grace period the
+   * runtime force-releases the slot instead of waiting forever. The timer is
+   * unref'd so a still-armed watchdog can never hold a headless process open,
+   * and it intentionally survives session_shutdown: the runtime outlives TUI
+   * session replacement, so the backstop must keep working across it.
+   */
+  private armWatchdog(runId: string): void {
+    if (this.watchdogs.has(runId)) return;
+    const timer = setTimeout(() => {
+      this.watchdogs.delete(runId);
+      const entry = this.active.get(runId);
+      if (!entry) return;
+      this.active.delete(runId);
+      this.record("run-watchdog-cleared", { runId, shadowId: entry.shadow.id });
+      if (this.latestContext && this.sessionLifetime.isActive) this.updateStatus(this.latestContext);
+    }, this.options.abortGraceMs ?? ABORT_GRACE_MS);
+    timer.unref();
+    this.watchdogs.set(runId, timer);
+  }
+
+  private releaseWatchdog(runId: string): void {
+    const timer = this.watchdogs.get(runId);
+    if (!timer) return;
+    clearTimeout(timer);
+    this.watchdogs.delete(runId);
+  }
+
+  private disarmWatchdogs(): void {
+    for (const timer of this.watchdogs.values()) clearTimeout(timer);
+    this.watchdogs.clear();
+  }
+
+  private forceClearActive(): void {
+    this.disarmWatchdogs();
+    this.active.clear();
   }
 
   private async drainHeadless(ctx: ExtensionContext): Promise<void> {
@@ -308,7 +429,11 @@ export class ShadowMindRuntime {
       durationMs: result.durationMs,
       active: this.active.size,
     });
-    if (!result.settled) this.abortAll("headless-drain-timeout");
+    if (!result.settled) {
+      this.abortAll("headless-drain-timeout");
+      this.forceClearActive();
+      this.updateStatus(ctx);
+    }
   }
 
   private record(kind: string, data?: Record<string, unknown>): void {
@@ -320,7 +445,16 @@ export class ShadowMindRuntime {
 
   private setPaused(paused: boolean, ctx: ExtensionContext): void {
     this.paused = paused;
-    if (paused) this.abortAll("paused");
+    if (paused) {
+      this.heartbeatEpoch += 1;
+      // Pausing invalidates the heartbeat just like new user input: the
+      // in-flight gatekeeper call is aborted instead of running out its window.
+      this.heartbeatAbort?.abort();
+      this.abortAll("paused");
+      // Invalidate results accepted around the pause so nothing can re-arm the
+      // batch window in the microtask gap and deliver after resume.
+      this.epoch += 1;
+    }
     ctx.ui.notify(paused ? "Shadow Mind paused" : "Shadow Mind resumed", "info");
     this.updateStatus(ctx);
   }
@@ -336,7 +470,9 @@ export class ShadowMindRuntime {
   }
 
   private hasRecentRunErrors(): boolean {
-    return this.recentEvents.slice(-3).some((event) => event.kind === "run-end" && (event.data?.reason === "error" || event.data?.reason === "timeout"));
+    return this.recentEvents.slice(-3).some((event) =>
+      event.kind === "gatekeeper-error"
+      || (event.kind === "run-end" && (event.data?.reason === "error" || event.data?.reason === "timeout")));
   }
 
   private statusLines(): string[] {
@@ -344,7 +480,7 @@ export class ShadowMindRuntime {
     const diagnostics = this.usageStore.error ? [...this.diagnostics, `usage: ${this.usageStore.error}`] : this.diagnostics;
     return [
       `🐙 Shadow Mind · ${this.paused ? "paused" : "active"} · running ${this.active.size}/${config.maxParallelShadows}`,
-      `heartbeat ${formatNumber(config.heartbeatProbability)} · batch ${config.resultBatchWindowMs}ms · timeout ${config.defaultShadowTimeoutSeconds}s · drain ${config.headlessDrainTimeoutSeconds}s · thinking ${config.defaultThinkingLevel}`,
+      `gatekeeper ${config.gatekeeperModel ?? config.defaultShadowModel ?? "main model"} · batch ${config.resultBatchWindowMs}ms · timeout ${config.defaultShadowTimeoutSeconds}s · drain ${config.headlessDrainTimeoutSeconds}s · thinking ${config.defaultThinkingLevel}`,
       `definitions: ${this.shadowCount} valid · ${this.diagnostics.length} invalid`,
       formatUsageDetail("session", this.sessionUsage),
       `usage lifetime · ${formatUsageSummary(this.usageStore.current)}`,
@@ -364,13 +500,9 @@ export class ShadowMindRuntime {
 }
 
 function resolveModel(ctx: ExtensionContext, fullId: string) {
-  const separator = fullId.indexOf("/");
-  if (separator <= 0 || separator === fullId.length - 1) return undefined;
-  return ctx.modelRegistry.find(fullId.slice(0, separator), fullId.slice(separator + 1));
-}
-
-function formatNumber(value: number): string {
-  return Number(value.toFixed(3)).toString();
+  const parts = fullId.split("/");
+  if (parts.length < 2) return undefined;
+  return ctx.modelRegistry.find(parts[0], parts.slice(1).join("/"));
 }
 
 function formatCompletedAt(completedAt: string): string {

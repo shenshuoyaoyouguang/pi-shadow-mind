@@ -53,7 +53,6 @@ Create `~/.pi/agent/shadow-minds/architecture-review.md`:
 ---
 id: architecture-review
 name: Architecture review
-activation_probability: 0.3
 active_for_models: ["*"]
 tools: [read, grep]
 ---
@@ -73,18 +72,22 @@ This Shadow is read-only. It reviews the implementation in parallel and reports 
 
 ### How it works
 
-After a main-agent `turn_end` that completed at least one tool call, the extension evaluates a heartbeat. Pure text-only conversation turns are skipped, so ordinary discussion does not wake Shadows. By default, eligible turns fire a heartbeat with probability `1/3`; Shadow Minds then roll independently using their own activation probabilities, with at most two running concurrently.
+After a main-agent `turn_end` that completed at least one tool call, the extension calls a lightweight gatekeeper model once with the sanitized trajectory and every candidate Shadow's responsibility summary. Pure text-only conversation turns are skipped, so ordinary discussion does not wake Shadows. The gatekeeper decides which Shadows to wake—possibly none—and attaches a one-sentence focus hint to each. At most two Shadows run concurrently.
+
+If the gatekeeper fails (bad output, timeout, missing auth), the turn is skipped and logged; there is no random fallback.
 
 Each activation starts a fresh temporary session. It inherits the main agent's unchanged system prompt but receives only a sanitized plain-text trajectory: assistant thinking is removed, while tool calls retain compact, deterministic result summaries.
 
 A Shadow first decides whether the trajectory is relevant to its responsibility. If unrelated, it exits without calling tools or `report_to_main`. When the main agent should receive a concrete result, the Shadow calls `report_to_main`, which immediately ends that run.
 
-Shadow definitions are ordinary Markdown files. They can be created and adjusted by the user or managed by the agent through the extension's tools. Model filters and activation probabilities allow different models to receive different supporting minds.
+Shadow definitions are ordinary Markdown files. They can be created and adjusted by the user or managed by the agent through the extension's tools. Model filters let different models receive different supporting minds.
+
+The gatekeeper model resolves as `gatekeeper_model` → `default_shadow_model` → the main agent's current model. Legacy scheduling knobs (`heartbeat_probability`, per-Shadow `activation_probability`, `random_seed`) are still parsed but ignored.
 
 ### Installation
 
 ```bash
-pi install npm:pi-shadow-mind@0.1.11
+pi install npm:pi-shadow-mind@0.2.0
 ```
 
 On the first session start, the extension creates:
@@ -152,7 +155,6 @@ Shadow Mind 可以保持只读，只向主 Agent 汇报发现；也可以获得�
 ---
 id: architecture-review
 name: Architecture review
-activation_probability: 0.3
 active_for_models: ["*"]
 tools: [read, grep]
 ---
@@ -171,18 +173,22 @@ tools: [read, grep]
 
 ### 工作方式
 
-主 Agent 的一次 `turn_end` 只有在该轮至少完成过一个工具调用时，扩展才进行 heartbeat 判断。纯文本对话轮次会被跳过，因此普通讨论不会唤醒 Shadow。符合条件的轮次默认以 `1/3` 的概率触发 heartbeat，Shadow Minds 再按照各自的激活概率独立抽选，默认最多同时运行两个。
+主 Agent 的一次 `turn_end` 只有在该轮至少完成过一个工具调用时，扩展才会调用一次轻量门卫模型，输入净化后的轨迹和所有候选 Shadow 的职责摘要。纯文本对话轮次会被跳过，因此普通讨论不会唤醒 Shadow。门卫决定本次唤醒哪些 Shadow（也可以一个都不唤醒），并为每个被唤醒的 Shadow 附上一句话焦点提示。默认最多同时运行两个。
+
+门卫失败（输出无法解析、超时、模型未认证）时本轮直接跳过并记录事件，不回退随机调度。
 
 每次激活都会创建一个全新的临时 Session。它继承主 Agent 原封不动的 system prompt，但只接收净化后的文本轨迹：思考内容会被移除，工具调用后仅保留简洁、确定性的结果概述。
 
 Shadow 会先判断轨迹是否与自己的职责相关。无关时直接结束，不调用工具或 `report_to_main`；需要向主 Agent 提交具体结果时，通过 `report_to_main` 上报并立即结束本轮。
 
-Shadow 定义只是普通 Markdown 文件，可以由用户创建和调整，也可以由 Agent 通过扩展工具管理。模型过滤和独立激活概率允许不同模型获得不同的辅助认知核心。
+Shadow 定义只是普通 Markdown 文件，可以由用户创建和调整，也可以由 Agent 通过扩展工具管理。模型过滤允许不同模型获得不同的辅助认知核心。
+
+门卫模型按 `gatekeeper_model` → `default_shadow_model` → 主 Agent 当前模型的顺序回退。旧调度参数（`heartbeat_probability`、每个 Shadow 的 `activation_probability`、`random_seed`）仍会被解析但被忽略。
 
 ### 安装
 
 ```bash
-pi install npm:pi-shadow-mind@0.1.11
+pi install npm:pi-shadow-mind@0.2.0
 ```
 
 首次启动 Session 时，扩展会创建：

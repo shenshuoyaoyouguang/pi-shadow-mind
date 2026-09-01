@@ -12,7 +12,7 @@ describe("SessionLifetime", () => {
     expect(action).not.toHaveBeenCalled();
   });
 
-  it("contains Pi stale-context errors and disables later session writes", () => {
+  it("contains stale-context errors without deactivating the replacement session", () => {
     const lifetime = new SessionLifetime();
     const laterAction = vi.fn();
     lifetime.activate();
@@ -20,9 +20,9 @@ describe("SessionLifetime", () => {
     expect(lifetime.run(() => {
       throw new Error("This extension ctx is stale after session replacement or reload. Do not use it.");
     })).toBe(false);
-    expect(lifetime.isActive).toBe(false);
-    expect(lifetime.run(laterAction)).toBe(false);
-    expect(laterAction).not.toHaveBeenCalled();
+    expect(lifetime.isActive).toBe(true);
+    expect(lifetime.run(laterAction)).toBe(true);
+    expect(laterAction).toHaveBeenCalledTimes(1);
   });
 
   it("does not hide unrelated programming errors", () => {

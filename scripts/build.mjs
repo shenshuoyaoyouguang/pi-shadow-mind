@@ -26,7 +26,7 @@ const externalImports = Object.values(buildResult.metafile.outputs)
   .filter((item) => item.external)
   .map((item) => item.path);
 const unexpectedExternalImports = externalImports.filter((path) =>
-  path !== "typebox" && !path.startsWith("node:") && !path.startsWith("@earendil-works/"),
+  path !== "typebox" && !path.startsWith("typebox/") && !path.startsWith("node:") && !path.startsWith("@earendil-works/"),
 );
 if (unexpectedExternalImports.length > 0) {
   throw new Error(`Unexpected external runtime imports: ${unexpectedExternalImports.join(", ")}`);

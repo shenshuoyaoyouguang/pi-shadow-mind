@@ -4,11 +4,11 @@
 
 Shadow Mind 是一个运行在 Pi 主 Agent 旁边的通用并行认知运行时。
 
-主 Agent 继续正常推理和执行任务；插件以 heartbeat 随机唤醒多个 Shadow Mind，让它们沿各自的职责独立观察或推进任务。Shadow 既可以检查 Main，也可以承担文档维护等并行工作，并在有结果需要同步时向主 Agent 注入消息。
+主 Agent 继续正常推理和执行任务；插件在每个符合条件的工具轮次结束后调用一次轻量门卫模型（Gatekeeper），由它判断应该唤醒哪些 Shadow Mind，让它们沿各自的职责独立观察或推进任务。Shadow 既可以检查 Main，也可以承担文档维护等并行工作，并在有结果需要同步时向主 Agent 注入消息。
 
-第一版要验证的核心假设是：
+当前版本要验证的核心假设是：
 
-> 不引入复杂的智能调度，仅通过随机唤醒多个具有持久职责的异步 Agent，能否让一个 Pi Session 稳定推进多条相互补充的认知与任务线。
+> 由一个读取净化轨迹与各 Shadow 职责的轻量门卫统一决定"何时唤醒谁"，能否比盲抽概率更准确地让一个 Pi Session 稳定推进多条相互补充的认知与任务线。
 
 纠错、事实核查和约束检查只是典型场景；Shadow 也可以探索替代路线、维护文档或承担其他长期职责。“多核”和“章鱼”可用于解释和后续产品表达，但不是运行时的技术定义。
 
@@ -23,9 +23,10 @@ Main Agent
 Trajectory Builder
     │  生成净化后的行为轨迹
     ▼
-Heartbeat Scheduler
-    │  按 heartbeat_probability 随机触发
-    │  每个 Shadow 按自己的概率独立参与
+Gatekeeper
+    │  按 turn_end 调用轻量模型分派：
+    │  输入净化轨迹 + 候选 Shadow 职责摘要
+    │  输出唤醒名单及各自的一句话焦点提示
     │  并行数量受 max_parallel_shadows 限制
     ▼
 Shadow Runtime × N
@@ -39,7 +40,7 @@ Shadow 的持久化定义与运行实例相互分离：
 - Shadow Mind 的定义是用户可阅读、可编辑的 Markdown 实体。
 - 第一版只维护全局 Shadow registry，不提供项目级 Shadow。
 - 每次激活产生全新的临时 AgentSession。
-- 插件负责发现实体、筛选、随机调度、构造上下文和回收结果。
+- 插件负责发现实体、筛选、门卫分派、构造上下文和回收结果。
 
 Shadow 的 Markdown 定义持久存在，但运行实例不保留长期记忆。每次激活只接收当时的净化轨迹和自身定义；运行结束或超时后立即销毁，不继承上一次激活的消息历史。
 
@@ -63,9 +64,9 @@ Shadow 的 Markdown 定义持久存在，但运行实例不保留长期记忆。
 
 该目录属于用户数据，不放入插件安装目录，也不随当前项目切换。插件级配置保存在 `config.json`；registry 只扫描目录顶层的 `.md` 文件，不读取 `config.json`，也不递归读取 `logs/`。
 
-`config.json` 保存默认 Shadow 模型、`default_thinking_level`、`heartbeat_probability`、`max_parallel_shadows`、`default_shadow_timeout_seconds` 和 `result_batch_window_ms` 等全局调度配置。`default_shadow_model` 省略时，插件使用激活时的当前 Main 模型；用户也可以配置一个固定默认模型。`default_thinking_level` 的内置默认值为 `low`。
+`config.json` 保存默认 Shadow 模型、`gatekeeper_model`、`default_thinking_level`、`max_parallel_shadows`、`default_shadow_timeout_seconds` 和 `result_batch_window_ms` 等全局调度配置。`default_shadow_model` 省略时，插件使用激活时的当前 Main 模型；用户也可以配置一个固定默认模型。`default_thinking_level` 的内置默认值为 `low`。已废弃的 `heartbeat_probability` 与 `random_seed` 键仍被宽容接受（原样保留在 `extraFields` 中），运行时忽略，不做迁移。
 
-每次符合调度条件的 Main `turn_end` 进行 heartbeat 判断前，插件检查并重新加载发生变化的 `config.json`。纯文本轮次不会进入 heartbeat。新配置只影响后续调度和新建实例；已经运行的 Shadow 继续使用启动时取得的配置快照。
+每次符合调度条件的 Main `turn_end` 进行门卫分派前，插件检查并重新加载发生变化的 `config.json`。纯文本轮次不会触发门卫调用。新配置只影响后续调度和新建实例；已经运行的 Shadow 继续使用启动时取得的配置快照。
 
 `config.json` 使用 last-known-good 策略。解析失败或字段无效时，插件继续使用最后一次有效配置，在界面及 `/shadow status` 中持续显示错误和当前实际生效值。只有首次加载就不存在有效配置时才使用内置默认值；插件不会自动用默认内容覆盖用户的无效文件。
 
@@ -79,7 +80,6 @@ id: grounded-reviewer
 name: 项目事实检查者
 enabled: true
 debug: false
-activation_probability: 0.6
 run_with_model: openai/gpt-5-mini
 thinking_level: low
 timeout_seconds: 120
@@ -104,8 +104,8 @@ active_for_models:
 | `name` | 展示名称；省略时使用最终解析出的 `id` |
 | `enabled` | 是否参与调度；默认 `true` |
 | `debug` | 是否保存完整 Shadow Session 日志；默认 `false` |
-| `activation_probability` | 每次 heartbeat 时独立激活的概率，范围为 `0` 到 `1`；默认 `0.3` |
-| `active_for_models` | 适用于哪些 Main 模型；`"*"` 表示全部模型，省略时默认 `["*"]` |
+| `activation_probability` | **废弃**：保留解析但忽略；历史上是每次 heartbeat 后的独立激活概率 |
+| `active_for_models` | 适用于哪些 Main 模型；仅当 `"*"` 是唯一元素时表示全部模型，省略时默认 `["*"]` |
 | `run_with_model` | Shadow 自己使用的模型；省略时使用插件默认模型 |
 | `thinking_level` | Shadow 使用的 thinking level；省略时使用插件默认值，再回退到 Main 会话当前生效等级 |
 | `timeout_seconds` | Shadow 单次运行超时；省略时使用插件默认超时 |
@@ -113,7 +113,7 @@ active_for_models:
 
 `name` 只用于 `shadow-report` 和状态界面展示，不参与身份判断；省略时回退到最终解析出的 `id`。Markdown 正文就是 Shadow 的认知定义、长期职责和行为要求。
 
-`active_for_models` 绑定的是被观察的 Main 模型，`run_with_model` 则指定 Shadow 自己运行时使用的模型。匹配前由 Pi 将 Main 的别名或简写解析为完整 `provider/model-id`；第一版只支持该完整 ID 和精确值 `"*"`，不引入其他通配、正则、标签或复杂条件。模型选择优先级为：Shadow 的 `run_with_model` → 插件的 `default_shadow_model` → 激活时的当前 Main 模型。
+`active_for_models` 绑定的是被观察的 Main 模型，`run_with_model` 则指定 Shadow 自己运行时使用的模型。匹配前由 Pi 将 Main 的别名或简写解析为完整 `provider/model-id`；第一版只支持该完整 ID 和精确值 `"*"`（`"*"` 仅在作为列表唯一元素时通配，与其他显式 id 混用时按字面处理，该混合列表只精确匹配其中列出的 id），不引入其他通配、正则、标签或复杂条件。模型选择优先级为：Shadow 的 `run_with_model` → 插件的 `default_shadow_model` → 激活时的当前 Main 模型。
 
 如果显式配置的 `run_with_model` 当前不存在、未认证或不可用，本次激活失败并写入轻量运行事件，不自动换用其他模型。只有省略该字段时才使用插件默认 Shadow 模型。
 
@@ -157,13 +157,13 @@ report_to_main({ content: "..." })
 
 插件提供默认运行超时，内置默认值为 `300s`。单个 Shadow 可以通过 `timeout_seconds` 覆盖。超时后插件终止该运行实例、释放并发槽位，并丢弃未完成结果，不向 Main 注入消息。
 
-第一版不设置单次 model call 数或工具调用次数上限。运行资源只通过 heartbeat 概率、Shadow 激活概率、最大并发数和时间超时控制。
+第一版不设置单次 model call 数或工具调用次数上限。运行资源只通过门卫调用频率（每个符合条件的工具轮次至多一次）、最大并发数和时间超时控制。
 
 所有 Shadow 都记录轻量运行事件，包括激活、沉默、上报、超时、中止、耗时、执行模型以及工具使用摘要。工具摘要只记录工具名、调用次数和成功/失败统计，不保存参数或结果。事件作为自定义 entries 写入当前 Main Session，随会话持久化和恢复，但不参与 Main 的模型上下文。
 
-每次 Main `turn_end` 都会写入一条轻量调度事件。没有工具活动的纯文本轮次记录为跳过；符合条件的轮次记录 heartbeat 随机值与是否触发，触发后再记录候选 Shadow、各自随机值、概率命中项、模型过滤、运行中排除、并发槽位裁剪和最终激活项。事件不保存 Main 或 Shadow 上下文，用于完整复盘调度决策。
+每次 Main `turn_end` 都会写入一条轻量调度事件。没有工具活动的纯文本轮次记录为跳过；符合条件的轮次记录门卫决策：候选 Shadow、最终激活项及各自的 brief、轨迹是否被截断，以及禁用、模型过滤与运行中排除情况。门卫调用失败（解析失败、超时、模型不可用或未认证）记录独立的错误事件，并在近期持续失败时点亮状态警告。事件不保存 Main 或 Shadow 上下文，用于完整复盘调度决策。
 
-`/shadow` 打开统一状态面板，展示当前 Session 的暂停状态、有效与无效 Shadow、正在运行的实例、最近事件和实际生效配置；`/shadow status` 提供对应的摘要视图。第一版面板以观察为主，不内置完整 Markdown 编辑器。
+`/shadow` 打开统一状态面板，展示当前 Session 的暂停状态、有效与无效 Shadow、正在运行的实例、最近事件和实际生效配置（包括当前使用的门卫模型）；`/shadow status` 提供对应的摘要视图。第一版面板以观察为主，不内置完整 Markdown 编辑器。
 
 Pi 主界面常驻一个紧凑状态指示，例如 `🐙 2`，数字表示当前运行的 Shadow 实例数。产生报告、超时或错误时指示器短暂改变状态，不弹出逐次通知；详细信息统一进入 `/shadow` 面板。
 
@@ -198,7 +198,7 @@ AI 调用 `create_shadow` 时必须显式提供 `id`，文件保存为 `<id>.md`
 
 `delete_shadow` 只删除 Markdown 定义，不删除 `logs/<shadow-id>/`。历史调试 Session 继续保留，日志清理必须由用户另行显式执行。
 
-插件同时提供读取和修改全局配置的工具。读取 `config.json` 无需确认；AI 请求修改时必须向用户展示配置差异并取得确认，不能静默改变 heartbeat 概率、并发上限、默认模型或其他调度行为。
+插件同时提供读取和修改全局配置的工具。读取 `config.json` 无需确认；AI 请求修改时必须向用户展示配置差异并取得确认，不能静默改变门卫模型、并发上限、默认模型或其他调度行为。模型覆盖字段（`default_shadow_model`、`gatekeeper_model`）接受显式 `null` 表示清除该键并回到回退链。
 
 插件不应把“事实检查者”“替代路线探索者”等类型写进主流程。新的认知视角通过新增 Markdown 实体扩展。
 
@@ -210,7 +210,7 @@ registry 加载时逐文件校验 frontmatter。无效 Markdown 只会使对应 
 
 `active_for_models` 省略时视为 `["*"]`，匹配所有 Main 模型。只有用于补偿特定模型表现的 Shadow 才需要显式声明模型列表。
 
-每次 heartbeat 判断前，registry 检查顶层 Markdown 的文件变更，只重新解析新增或发生变化的文件，并移除已删除定义。不使用文件系统实时监听；用户手动编辑的结果在下一次 Main `turn_end` 生效。
+每次门卫分派前，registry 检查顶层 Markdown 的文件变更，只重新解析新增或发生变化的文件，并移除已删除定义。不使用文件系统实时监听；用户手动编辑的结果在下一次 Main `turn_end` 生效。
 
 Shadow 实例启动时取得定义的不可变快照。运行期间对 Markdown 的修改、禁用或删除只影响后续激活，不会改变或中止已有实例；需要立即停止时由用户执行 `/shadow pause`。
 
@@ -223,7 +223,7 @@ Shadow 上下文以 Main 能看到的完整上下文为基础做减法，而不�
 - 用户消息；
 - Main 的普通文本；
 - 工具调用及其结果概述；
-- 已注入 Main 会话的历史 `shadow-report`；
+- 已注入 Main 会话的历史 `shadow-report`（有界保留，规则见 §6）；
 - 当前 Shadow Mind 的定义。
 
 Main system prompt 保持完整原文，不追加 Shadow 专属 suffix，既避免 Shadow 遗漏 Main 必须遵守的约束，也使 Main 与所有 Shadow 共享完全相同的 system prompt cache。system prompt 之后只有一条真实的用户消息：先放净化后的纯文本轨迹，再声明 Shadow 公共协议和当前 Shadow Markdown 定义，最后以 kickoff 结束并启动本轮。不伪造 assistant 身份交接消息。
@@ -239,7 +239,7 @@ Main system prompt
 
 这里的“全部历史”以 Main 激活时实际可见的上下文为准。Main 已发生 compaction 时，Shadow 继承压缩后的上下文，不绕过 compaction 读取已被替换的原始消息。
 
-由于净化轨迹是 Main 上下文的严格子集，第一版不增加单独的摘要或截断机制。如果某个 Shadow 配置的 `run_with_model` 上下文窗口更小而无法容纳轨迹，则该次激活失败并记录原因，不生成介入消息。
+由于净化轨迹是 Main 上下文的严格子集，轨迹本身不增加摘要或截断机制，完整继承 Main 可见上下文；唯一的例外是历史 `shadow-report` 反馈链按 §6 有界保留。如果某个 Shadow 配置的 `run_with_model` 上下文窗口更小而无法容纳轨迹，则该次激活失败并记录原因，不生成介入消息。
 
 以下内容不进入 Shadow 上下文：
 
@@ -277,58 +277,48 @@ shell({ command: "npm test" }) · 失败，12 项通过、2 项失败
 工具摘要器是独立扩展点；增加新工具时注册对应摘要器，不在轨迹构建主流程中持续追加类型分支。
 
 这样，Shadow 可以观察 Main 做了什么以及行动的大致结果，但无法直接继承 Main 的证据内容和推理路径。需要核实时，Shadow 使用自己的工具重新调查，形成独立证据链。
+## 5. Gatekeeper 调度
 
-## 5. Heartbeat 调度
+调度权属于一个轻量门卫模型（Gatekeeper）。Main model call 完成后，只有该 `turn_end` 至少包含一个已完成的工具调用，才触发一次门卫调用；纯文本轮次直接跳过，不调用门卫。这会压制普通问答、方案讨论和 Shadow 报告后的纯文本回应产生的无效唤醒。带工具调用的中间轮次仍参与判断，因此 Main 一旦开始读取、验证或修改项目，Shadow 就有机会介入。Shadow AgentSession 自己的 `turn_end` 不参与 Main 调度。
 
-第一版不识别 plan change、uncertainty、risk 等语义事件，也不使用 Gate Model。
+由 `shadow-report` 触发的 Main 补充或修正只有在实际调用工具时才重新获得门卫评估机会，避免纯文本报告与回应形成递归唤醒链。
 
-Main model call 完成后，只有该 `turn_end` 至少包含一个已完成的工具调用，才按插件配置 `heartbeat_probability` 独立判断是否产生 heartbeat。默认值为 `1/3`：
+### 门卫契约
 
-```text
-P(heartbeat after eligible tool-bearing turn) = heartbeat_probability
-default heartbeat_probability = 1 / 3
-```
+每个符合条件的 `turn_end` 至多调用一次门卫（无空闲并发槽位或预筛后候选为空时跳过本轮调用）：
 
-纯文本轮次直接跳过，不消耗随机数，也不启动 Shadow。这会压制普通问答、方案讨论和 Shadow 报告后的纯文本回应产生的无效唤醒。带工具调用的中间轮次仍参与判断，因此 Main 一旦开始读取、验证或修改项目，Shadow 仍可并行介入。Shadow AgentSession 自己的 `turn_end` 不参与 Main heartbeat。
+1. 本地确定性预筛候选 Shadow（零成本）：`enabled: true`、`active_for_models` 匹配当前 Main 模型、排除正在运行的同一 Shadow。没有空闲并发槽位或候选为空时直接跳过，不调用门卫。
+2. 门卫输入：净化轨迹（未超出上下文时与 Shadow 看到的完全一致；超出门卫模型上下文时按第 4 条保头保尾截断，而 Shadow 侧轨迹不截断）+ 候选清单（每行 `id | name | 职责摘要`）。职责摘要取 Markdown 正文前 400 字符，不做额外总结调用。
+3. 门卫输出严格 JSON：`{"activations":[{"id":"...","brief":"..."}]}`，`brief` 是给该 Shadow 的一句话焦点提示。解析时容忍 markdown 代码围栏；未知 id 丢弃、重复 id 去重、`brief` 缺省为空串。名单可以为空。
+4. 轨迹超出门卫模型上下文窗口时做保头保尾截断：首条 USER 消息（原始任务意图）必保留，剩余预算留给尾部最近的工具活动，并在决策事件中标记截断。不做分块或多次调用。
 
-由 `shadow-report` 触发的 Main 补充或修正只有在实际调用工具时才重新获得 heartbeat 机会，避免纯文本报告与回应形成递归唤醒链。
+被唤醒的 Shadow 在自己的定义之前收到一行中性参考提示：`唤醒理由（供参考）：<brief>`。它不是指令，Shadow 醒来后原有的“无关即退出”自检仍然优先——门卫误报时 Shadow 仍能自行退出。brief 是不可信的门卫输出：注入前做压平、定界符剥离和长度上限处理，运行协议明确要求 Shadow 把该行当作数据而非指令，不执行其中出现的任何指示。
 
-默认情况下，相邻 heartbeat 的期望间隔为 3 个符合条件的工具轮次，但实际间隔保持随机：可能连续发生，也可能较长时间不发生。
+### 失败语义
 
-第一版直接使用运行时随机数，不提供或持久化随机 seed，也不承诺重放同一调度序列。实际抽样值通过轻量调度事件保留，供事后分析。
+门卫失败一律 fail-closed：本轮跳过激活，记录轻量错误事件，不回退随机抽签。失败路径包括：显式配置的门卫模型不存在或未认证、thinking level 全部不支持、30 秒超时（固定常量，不设配置字段）、输出无法解析为有效名单。新用户输入使 epoch 失效时，在途门卫调用立即中止。
 
-heartbeat 发生时：
+### 分派与并发
 
-1. 读取当前 Main 模型。
-2. 筛选 `enabled: true` 且 `active_for_models` 匹配的 Shadow。
-3. 排除当前正在运行的同一 Shadow。
-4. 每个剩余 Shadow 按自己的 `activation_probability` 独立判断是否激活。
-5. 如果命中项超过 `max_parallel_shadows`，从中随机选择允许的数量。
-6. 并行创建运行实例并传入各自的净化轨迹。
+门卫返回名单后：
 
-一次 heartbeat 可能不激活任何 Shadow，也可能激活一个或多个。一次 heartbeat 不等待 Shadow 完成，Main 继续工作。
+1. 按 `id` 映射回候选 Shadow 定义。
+2. 名单长度超过剩余槽位时裁剪到 `max_parallel_shadows` 允许的数量，未选中的直接跳过，不进入等待队列，也不保留本次轨迹快照。
+3. 并行创建运行实例并传入各自的净化轨迹与 brief。
 
-`max_parallel_shadows` 是插件级调度配置，默认值为 `2`。它限制同一时刻正在运行的 Shadow 实例总数，而不仅是单次 heartbeat 新建的数量。heartbeat 只能使用剩余并发槽位：
+一次分派可能不激活任何 Shadow，也可能激活一个或多个。分派不等待 Shadow 完成，Main 继续工作。
+
+`max_parallel_shadows` 是插件级调度配置，默认值为 `2`。它限制同一时刻正在运行的 Shadow 实例总数，而不仅是单次新建的数量：
 
 ```text
 available_slots = max_parallel_shadows - running_shadow_count
 ```
 
-如果没有剩余槽位，本次 heartbeat 不启动新的 Shadow。
+如果没有剩余槽位，本次 `turn_end` 不调用门卫，也不启动新的 Shadow。
 
-命中数量超过剩余槽位时，未被随机选中的 Shadow 直接跳过，不进入等待队列，也不保留本次轨迹快照。后续 heartbeat 会基于届时的最新上下文重新判断。
+门卫模型的回退链为：`config.gatekeeper_model` → `default_shadow_model` → 激活时的当前 Main 模型。显式配置的模型不存在或未认证时本次分派失败并写入轻量事件，不自动换用其他模型。thinking level 直接使用插件的 `default_thinking_level`，模型不支持该等级时回退 Main 当前生效等级。
 
-`activation_probability` 表示 heartbeat 已经发生之后，该 Shadow 被选中的基础概率。因此某个 Shadow 在单次符合条件的 Main 工具轮次后获得激活机会的基础概率为：
-
-```text
-P(activation) = heartbeat_probability × activation_probability
-```
-
-`activation_probability` 省略时使用默认值 `0.3`。在默认 heartbeat 概率 `1/3` 下，且不考虑并发槽位竞争时，该 Shadow 每次符合条件的 Main `turn_end` 的基础激活概率约为 `10%`；纯文本轮次为 `0%`。
-
-当一次 heartbeat 的命中数量超过剩余并发槽位时，并发上限会进一步降低每个命中项的最终激活概率。
-
-Main 在会话中切换模型后，后续 heartbeat 直接依据新模型重新筛选。
+Main 在会话中切换模型后，后续分派直接依据新模型重新预筛。
 
 ## 6. Shadow 的输出与介入
 
@@ -389,7 +379,7 @@ Main 声称项目已有 UserRole，但当前轨迹不足以支持该结论。
 
 `shadow-report` 在聊天中采用紧凑展开样式，直接显示章鱼标识、来源 Shadow 名称和完整报告内容，但视觉层级弱于用户消息和 Main 普通回复，不使用大型对话气泡，也不默认折叠。
 
-历史 `shadow-report` 会进入后续 Shadow 的净化轨迹，形成显式反馈链。新的 Shadow 可以结合 Main 对既有报告的响应继续复查：问题已解决则保持沉默，尚未解决则再次上报。
+历史 `shadow-report` 会进入后续 Shadow 的净化轨迹，形成显式反馈链。为避免反馈链随会话增长无限制膨胀，轨迹只保留最近至多 3 份、合计不超过 4000 字符的 `shadow-report`（单独超限的最新报告被跳过，较早的合格报告仍可入选），未入选的报告以一条显式省略标记代替。新的 Shadow 可以结合 Main 对既有报告的响应继续复查：问题已解决则保持沉默，尚未解决则再次上报。
 
 Shadow 自己的静默工具调用和行动摘要不进入 Main 消息历史，也不进入后续 Shadow 的净化轨迹。它们只体现在共享的外部环境、Main Session 的轻量观测 entries 和可选 debug 日志中。Shadow 之间的显式认知传播只通过 `shadow-report` 发生。
 
@@ -401,11 +391,10 @@ Shadow 自己的静默工具调用和行动摘要不进入 Main 消息历史，�
 current epoch
 current Main model
 model call count
-heartbeat_probability
+gatekeeper_model
 max_parallel_shadows
 result_batch_window_ms
 default_shadow_timeout_seconds
-Shadow activation probabilities
 running Shadow IDs
 active Shadow runs and their start epoch
 lightweight Shadow run events in Main Session custom entries
@@ -417,11 +406,11 @@ Shadow 的临时 AgentSession 不跨激活复用，也不写回记忆。
 
 轻量事件属于运行观测数据，不参与任何 Agent 的上下文。`debug: true` 产生的完整 Session 日志也只用于调试，不会成为后续 Shadow 的记忆。
 
-插件提供 `Alt+S` 快捷键以及 `/shadow toggle`、`/shadow pause`、`/shadow resume` 命令，只控制当前 Main Session 是否继续产生 heartbeat，不修改全局 Shadow Markdown。执行 pause 时立即中止当前 Session 已运行的 Shadow、清空尚未发送的聚合结果并释放并发槽位；resume 后从后续 Main `turn_end` 恢复概率判断。暂停时底部状态固定显示 `🐙 Paused`，不展示恒为零的运行数量。
+插件提供 `Alt+S` 快捷键以及 `/shadow toggle`、`/shadow pause`、`/shadow resume` 命令，只控制当前 Main Session 是否继续进行门卫分派，不修改全局 Shadow Markdown。执行 pause 时立即中止当前 Session 已运行的 Shadow 与在途门卫调用、清空尚未发送的聚合结果并释放并发槽位；resume 后从后续 Main `turn_end` 恢复分派。暂停时底部状态固定显示 `🐙 Paused`，不展示恒为零的运行数量。
 
 同一个 Shadow 在前一次实例仍运行时不重复激活；不同 Shadow 可以并行运行。
 
-前一次实例结束后，同一个 Shadow 可以在同一用户 epoch 内被后续 heartbeat 再次激活，不设置每 epoch 次数上限。每次仍创建全新的临时 AgentSession，并取得激活时刻的最新完整净化轨迹。
+前一次实例结束后，同一个 Shadow 可以在同一用户 epoch 内被后续分派再次激活，不设置每 epoch 次数上限。每次仍创建全新的临时 AgentSession，并取得激活时刻的最新完整净化轨迹。
 
 ## 8. 第一版范围
 
@@ -429,16 +418,17 @@ Shadow 的临时 AgentSession 不跨激活复用，也不写回记忆。
 
 - 从 Markdown 发现和加载多个 Shadow Mind；
 - 隔离无效定义并提供持续可见的校验错误；
-- 每次 heartbeat 前增量刷新全局 registry；
+- 每次分派前增量刷新全局 registry；
 - 维护全局 Shadow registry；
 - 每次激活创建并在结束后销毁全新的临时 AgentSession；
 - 用户和 AI 创建、修改、启用与停用 Shadow；
 - AI 写入全局 Shadow registry 前取得用户确认；
 - 按 Main 模型筛选 Shadow；
 - 为每个 Shadow 配置执行模型，并支持插件级默认模型；
-- 纯文本 Main 轮次跳过 heartbeat，只在完成工具调用的轮次参与调度；
-- 通过 `heartbeat_probability` 配置随机 heartbeat，默认概率为 `1/3`；
-- 每个 Shadow 按自己的概率参与 heartbeat；
+- 纯文本 Main 轮次跳过分派，只在完成工具调用的轮次触发门卫；
+- 每个符合条件的 `turn_end` 调用一次轻量门卫模型，由它决定唤醒名单与各自的焦点提示；
+- 门卫失败时 fail-closed 跳过本轮，不回退随机调度；
+- 通过 `gatekeeper_model` 配置门卫模型，支持 `gatekeeper_model` → `default_shadow_model` → Main 当前模型的回退链；
 - 通过 `max_parallel_shadows` 配置最大并行数量；
 - 构造净化轨迹；
 - 默认使用当前 Main Session 的全部净化历史；
@@ -463,7 +453,7 @@ Shadow 的临时 AgentSession 不跨激活复用，也不写回记忆。
 第一版明确不包含：
 
 - 项目级 Shadow 及全局/项目覆盖规则；
-- 语义 Gate 或 Expected Value of Thinking 预测；
+- Expected Value of Thinking 预测或多门卫集成投票（当前只有一个轻量门卫做单一分派）；
 - 根据错误、风险、计划变化等事件进行规则调度；
 - 学习型调度器；
 - Shadow 之间通信；
@@ -488,6 +478,7 @@ Pi + multiple Shadow Minds
 - Shadow 的介入是否改变了 Main 的后续行为；
 - 是否减少项目事实编造、遗漏约束和错误路线；
 - 无效或有害介入的比例；
-- heartbeat 频率和并行数量带来的成本与延迟。
+- 门卫调用成本和并行数量带来的成本与延迟；
+- 门卫唤醒决策的准确率：误报（唤醒后自检退出）与漏报（该唤醒未唤醒）的比例。
 
 这些运行数据将决定后续是否值得引入更复杂的调度，而不是在第一版提前设计智能 Gate。

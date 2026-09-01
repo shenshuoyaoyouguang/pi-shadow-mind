@@ -39,7 +39,7 @@ export function resolveShadowTools(
   return { tools, missing };
 }
 
-import { buildShadowRequest, buildShadowSystemPrompt } from "./protocol.js";
+import { buildShadowRequest } from "./protocol.js";
 import { serializeTrajectory } from "./trajectory.js";
 
 const SELF_PATH = normalize(resolve(fileURLToPath(import.meta.url)));
@@ -61,6 +61,8 @@ export interface ShadowRunRequest {
   modelAuthOk?(model: Model<any>): boolean;
   /** The main session's effective thinking level at activation, used as the final fallback. */
   mainThinkingLevel?: ThinkingLevel;
+  /** One-line wake-up reason from the gatekeeper, injected as a neutral reference. */
+  brief?: string;
   onReport(report: ShadowReport): void;
 }
 
@@ -97,8 +99,8 @@ interface RunState {
 }
 
 function runReason(timedOut: boolean, reported: boolean, aborted: boolean, failed = false): ShadowRunResult["reason"] {
-  if (timedOut) return "timeout";
   if (reported) return "report";
+  if (timedOut) return "timeout";
   if (aborted) return "aborted";
   return failed ? "error" : "silent";
 }
@@ -149,7 +151,8 @@ export class ShadowRunner {
       const model = resolveRunModel(request);
       assertShadowModelAuth(model, request);
       const trajectory = serializeTrajectory(request.messages);
-      assertTrajectoryFits(model, [trajectory]);
+      const shadowRequest = buildShadowRequest(trajectory, request.shadow, request.brief);
+      assertTrajectoryFits(model, request.mainSystemPrompt, shadowRequest);
       sessionManager = await createShadowSessionManager(request);
       const boot = await this.bootstrapSession(request, model, controller, state, sessionManager);
       state.session = boot.session;
@@ -168,7 +171,7 @@ export class ShadowRunner {
         void boot.session?.abort();
       }, timeoutMs);
       controller.signal.addEventListener("abort", () => void boot.session?.abort(), { once: true });
-      await boot.session.prompt(buildShadowRequest(trajectory, request.shadow));
+      await boot.session.prompt(shadowRequest);
       await boot.session.waitForIdle();
       finalReason = runReason(state.timedOut, state.reported, controller.signal.aborted);
       return buildRunResult({ reason: finalReason, durationMs: Date.now() - started, session: boot.session, baseMessageCount, missingTools, thinkingLevel });
@@ -197,7 +200,7 @@ export class ShadowRunner {
       cwd: request.cwd,
       agentDir: request.agentDir,
       settingsManager,
-      systemPrompt: buildShadowSystemPrompt(request.mainSystemPrompt),
+      systemPrompt: request.mainSystemPrompt,
       // The inherited main system prompt already embeds APPEND_SYSTEM.md,
       // AGENTS.md and skills; keep the loader from re-discovering them so the
       // shadow context stays a strict subset (no duplication).
@@ -210,7 +213,8 @@ export class ShadowRunner {
       }),
     });
     const reportTool = createReportTool((content) => {
-      if (state.reported || controller.signal.aborted) return;
+      if (!content.trim()) return false;
+      if (state.reported || controller.signal.aborted) return false;
       state.reported = true;
       request.onReport({
         shadowId: request.shadow.id,
@@ -220,6 +224,7 @@ export class ShadowRunner {
         runId: request.runId,
       });
       queueMicrotask(() => void state.session?.abort());
+      return true;
     });
     const tools = [...new Set(request.tools)];
     const created = await createAgentSession({
@@ -246,15 +251,44 @@ export class ShadowRunner {
   }
 }
 
-export function toolMetrics(messages: readonly { role?: string; toolName?: string; isError?: boolean }[]): { toolCalls: number; toolFailures: number; toolStats: ToolStat[] } {
+export interface ToolMetricsMessage {
+  role?: string;
+  toolName?: string;
+  isError?: boolean;
+  toolCallId?: string;
+  content?: unknown;
+}
+
+/**
+ * Count tool usage from tool results; a call aborted mid-flight leaves no
+ * result, so its assistant toolCall block is counted instead (matched by call
+ * id to avoid double-counting completed calls).
+ */
+export function toolMetrics(messages: readonly ToolMetricsMessage[]): { toolCalls: number; toolFailures: number; toolStats: ToolStat[] } {
   const stats = new Map<string, ToolStat>();
-  for (const message of messages) {
-    if (message.role !== "toolResult") continue;
-    const tool = message.toolName ?? "unknown";
+  const record = (tool: string, isError: boolean): void => {
     const entry = stats.get(tool) ?? { tool, calls: 0, failures: 0 };
     entry.calls += 1;
-    if (message.isError) entry.failures += 1;
+    if (isError) entry.failures += 1;
     stats.set(tool, entry);
+  };
+  const answered = new Set<string>();
+  for (const message of messages) {
+    if (message.role === "toolResult" && typeof message.toolCallId === "string") answered.add(message.toolCallId);
+  }
+  for (const message of messages) {
+    if (message.role !== "toolResult") continue;
+    record(message.toolName ?? "unknown", Boolean(message.isError));
+  }
+  for (const message of messages) {
+    if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
+    for (const block of message.content) {
+      if (!block || typeof block !== "object") continue;
+      const call = block as { type?: string; id?: string; name?: string };
+      if (call.type !== "toolCall" || !call.name) continue;
+      if (call.id && answered.has(call.id)) continue;
+      record(call.name, false);
+    }
   }
   const toolStats = [...stats.values()].sort((a, b) => b.calls - a.calls);
   return {
@@ -288,7 +322,7 @@ export function usageMetrics(messages: readonly AgentMessage[]): ShadowUsage {
   return aggregate;
 }
 
-function createReportTool(onReport: (content: string) => void): ToolDefinition {
+function createReportTool(onReport: (content: string) => boolean): ToolDefinition {
   return {
     name: "report_to_main",
     label: "Report to Main",
@@ -297,8 +331,12 @@ function createReportTool(onReport: (content: string) => void): ToolDefinition {
     parameters: Type.Object({ content: Type.String({ description: "The complete report for the main agent" }) }),
     async execute(_toolCallId, params) {
       const content = (params as { content: string }).content;
-      onReport(content);
-      return { content: [{ type: "text", text: "Report delivered." }], details: {}, terminate: true };
+      const delivered = onReport(content);
+      return {
+        content: [{ type: "text", text: delivered ? "Report delivered." : "Report ignored (empty or duplicate)." }],
+        details: {},
+        ...(delivered ? { terminate: true } : {}),
+      };
     },
   };
 }
@@ -341,9 +379,23 @@ export function resolveRunThinkingLevel(model: Model<any>, request: ShadowRunReq
   throw new Error(`no supported thinking level for ${model.provider}/${model.id} (tried: ${candidates.join(", ") || "none"})`);
 }
 
-function assertTrajectoryFits(model: Model<any>, messages: readonly unknown[]): void {
-  const chars = messages.reduce<number>((sum, message) => sum + (JSON.stringify(message)?.length ?? 0), 0);
-  const estimated = Math.ceil(chars / 2);
+/**
+ * Rough fit check over the full prompt context (inherited system prompt plus
+ * the complete Shadow request text). ASCII serializes to ≈4 chars per token,
+ * but CJK and other non-ASCII text averages closer to one token per character,
+ * so non-ASCII chars are weighted 1:1 to keep the estimate conservative; a 10%
+ * margin covers the rest.
+ */
+function assertTrajectoryFits(model: Model<any>, systemPrompt: string, requestText: string): void {
+  let ascii = 0;
+  let nonAscii = 0;
+  for (const text of [systemPrompt, requestText]) {
+    for (let index = 0; index < text.length; index += 1) {
+      if (text.charCodeAt(index) > 0x7f) nonAscii += 1;
+      else ascii += 1;
+    }
+  }
+  const estimated = Math.ceil((ascii / 4 + nonAscii) * 1.1);
   if (estimated > model.contextWindow) {
     throw new Error(`trajectory ~${estimated} tokens exceeds ${model.provider}/${model.id} context window (${model.contextWindow})`);
   }

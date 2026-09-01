@@ -10,25 +10,35 @@
 - 不允许出现上帝组件、上帝对象或持续膨胀的入口文件。状态和行为必须放在实际拥有该职责的模块中；入口层只负责组合、编排和暴露能力。
 - 新能力落地前先确定所有者和扩展点。若实现主要是在大型组件或主流程中追加状态、分支和方法，应先拆出独立职责，再接入外层。
 
-# UI font-size rules
+# Repo basics
 
-- 字号按信息角色统一，不随组件随意放大：页面标题约 `22px`，连续正文与主要输入约 `14px`，常规按钮、菜单、导航和列表约 `13px`，辅助说明与紧凑控件约 `11px`，代码约 `12px`。
-- 优先复用项目已有的字号 token 或共用类，不散落新的任意字号；确有特殊层级时才局部覆盖，并保持同类组件一致。
-- 密集工具栏、Composer 操作行、状态切换和菜单项不能直接沿用组件库偏大的默认字号，应主动校准到 `11–13px`。
-- `10px` 只用于极弱、非关键元数据，不用于正文、操作标签、表单内容或必须快速识别的状态；不要用缩小字体代替合理的布局和截断。
-- 缩小字号时同步检查行高、图标尺寸、对齐、焦点环和点击区域；文字可以紧凑，但交互命中区不得随之缩小。
+- 这是 Pi 扩展（`pi-package`），纯 ESM TypeScript，构建目标 Node 20。入口 `src/index.ts` 只做组合，真正的注册逻辑在 `src/runtime.ts` 的 `ShadowMindRuntime`。
+- 模块解析为 NodeNext：src 内相对导入必须带 `.js` 后缀。
+- 常用命令：
+  - `npm run verify`：typecheck + 全部测试，提交前必跑
+  - `npx vitest run test/registry.test.ts`：跑单个测试文件
+  - `npm run build`：清理后 tsc 生成声明，esbuild 打包到 `dist/index.js`
+  - 开发运行：`pi -e ./src/index.ts`
+- 测试用 vitest globals，`test/*.test.ts` 与 src 模块一一对应，纯单元测试，无外部服务依赖。
+- README.md 是英/中双语，行为变化需同步更新两节；DESIGN.md 是行为契约文档。
+
+# Build invariants（scripts/build.mjs 强制校验）
+
+- 只有 `@earendil-works/*`、`typebox`、`node:*` 允许 external，其余依赖一律打入单文件 ESM bundle；出现其他 external 导入会构建失败。
+- `yaml` 是 devDependency，仅构建期使用并打进 bundle；不要把它改成 runtime/peer 依赖。
+- bundle 必须是纯 ESM：出现 esbuild 的 `__require` CJS 兼容 shim 会构建失败。
+- `dist/` 只允许 `index.js`、`index.js.map`、`index.d.ts` 三个文件。
+- 构建末尾用原生 ESM import 冒烟加载 dist，因为 `pi -e` 走 Jiti 的 CJS 兼容层，可能掩盖真实环境的 ESM 加载问题。
 
 # Release process
 
 发布目标是同时生成两个产物：用于 npm 发布的 `pi-shadow-mind-<version>.tgz`，以及解压后可由 `pi install ./pi-shadow-mind-<version>` 安装的 standalone ZIP。
 
-1. 发布前更新 `package.json` 版本，并运行 `npm install` 同步 lockfile。不要覆盖同版本的既有正式产物；代码有变化时应提升版本。
-2. 运行 `npm run verify`，要求类型检查及全部测试通过。
-3. 运行 `npm run build`，确认扩展入口为 `dist/index.js`，包内不分发 `src/` 和测试。构建必须把 `yaml` 等第三方运行时依赖打入入口 bundle；Pi 核心包与 `typebox` 保持 external。
-4. 运行 `npm pack --ignore-scripts --pack-destination release` 生成 `.tgz`。若未提前执行验证和构建，则改用普通 `npm pack`，由 `prepack` 自动完成。
-5. 制作 standalone ZIP：将 `.tgz` 解包至同名目录，再压缩整个同名目录。ZIP 内必须保留顶层包目录，且不得依赖接收方另行安装 `yaml` 等普通运行时依赖。
-6. 在隔离目录中通过 Pi `DefaultResourceLoader` 加载 standalone 包的 `dist/index.js`。冒烟检查必须设置 `noExtensions: true` 并仅通过 `additionalExtensionPaths` 加载待测入口，避免本机已配置的同名插件造成假冲突。
-7. 确认加载无错误，且可识别 `/shadow` 和全部管理工具。随后为 `.tgz`、ZIP 生成 SHA-256，并写入 `release/SHA256SUMS.txt`。
-8. 交付时优先提供 standalone ZIP；`.tgz` 用于 npm 发布。说明 ZIP 的安装方式：解压后运行 `pi install ./pi-shadow-mind-<version>`。
+1. 发布前更新 `package.json` 版本并运行 `npm install` 同步 lockfile。代码有变化时提升版本，不覆盖同版本的既有正式产物。
+2. `npm run verify` 通过后再 `npm run build`。
+3. 已提前验证和构建时，用 `npm pack --ignore-scripts --pack-destination release` 生成 `.tgz`；否则用普通 `npm pack`，由 `prepack` 自动完成 verify + build。
+4. 制作 standalone ZIP：将 `.tgz` 解包至同名目录，再压缩整个同名目录。ZIP 内必须保留顶层包目录，且接收方无需另行安装 `yaml` 等运行时依赖。
+5. 冒烟检查：`node scripts/smoke-standalone.mjs <standalone-package-directory>`。脚本在隔离沙箱中通过 Pi `DefaultResourceLoader` 加载 `dist/index.js`（`noExtensions: true` 且仅经 `additionalExtensionPaths` 加载待测入口，避免本机已配置的同名插件造成假冲突），并校验 8 个管理工具、`/shadow` 命令和 Alt+S 快捷键齐全。
+6. 为 `.tgz` 和 ZIP 生成 SHA-256 写入 `release/SHA256SUMS.txt`。交付优先提供 standalone ZIP；`.tgz` 用于 npm 发布（`.npmrc` 依赖 `NPM_TOKEN` 环境变量）。
 
 清理或覆盖 `release/` 下的暂存目录和旧产物前，必须解析并核对目标的绝对路径确实位于当前项目的 `release/` 内，不得对工作区根目录使用递归删除。

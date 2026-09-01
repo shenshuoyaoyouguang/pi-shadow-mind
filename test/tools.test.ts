@@ -44,6 +44,20 @@ describe("toolMetrics", () => {
       { tool: "grep", calls: 1, failures: 0 },
     ]);
   });
+
+  it("counts unanswered toolCall blocks from aborted runs without double-counting completed ones", () => {
+    const metrics = toolMetrics([
+      { role: "assistant", content: [{ type: "toolCall", id: "t1", name: "write" }] },
+      { role: "assistant", content: [{ type: "toolCall", id: "t2", name: "read" }] },
+      { role: "toolResult", toolName: "read", isError: false, toolCallId: "t2" },
+    ]);
+    expect(metrics.toolCalls).toBe(2);
+    expect(metrics.toolFailures).toBe(0);
+    expect(metrics.toolStats).toEqual([
+      { tool: "read", calls: 1, failures: 0 },
+      { tool: "write", calls: 1, failures: 0 },
+    ]);
+  });
 });
 
 describe("buildRunResult", () => {

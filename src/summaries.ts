@@ -15,6 +15,11 @@ export function summarizeToolResult(result: ToolResultLike): string {
   return result.isError ? `error · ${summary}` : summary;
 }
 
+/**
+ * Plugin extension point: register a custom summarizer for a tool result so the
+ * trajectory representation stays compact even for third-party tools.  Exported
+ * and called by plugin code, not by this package's internal modules.
+ */
 export function registerToolResultSummarizer(toolName: string, summarizer: Summarizer): void {
   summarizers.set(toolName, summarizer);
 }
@@ -55,6 +60,16 @@ function textContent(content: unknown): string {
     .map((part) => part.text ?? "").join("\n");
 }
 
+/** Hard cap for line previews: a minified single-line bundle must not flood the prompt. */
+const PREVIEW_MAX_CHARS = 200;
+
 function compact(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
+  const collapsed = value.replace(/\s+/g, " ").trim();
+  // Fast path: short in UTF-16 units is always short in code points.
+  if (collapsed.length <= PREVIEW_MAX_CHARS) return collapsed;
+  // Guard and cap by code points alike: astral-heavy text whose units exceed
+  // the cap may still have ≤200 code points — nothing is cut, so no ellipsis.
+  const chars = Array.from(collapsed);
+  if (chars.length <= PREVIEW_MAX_CHARS) return collapsed;
+  return `${chars.slice(0, PREVIEW_MAX_CHARS).join("")}…`;
 }
