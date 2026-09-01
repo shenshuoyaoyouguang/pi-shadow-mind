@@ -105,7 +105,7 @@ active_for_models:
 | `enabled` | 是否参与调度；默认 `true` |
 | `debug` | 是否保存完整 Shadow Session 日志；默认 `false` |
 | `activation_probability` | **废弃**：保留解析但忽略；历史上是每次 heartbeat 后的独立激活概率 |
-| `active_for_models` | 适用于哪些 Main 模型；`"*"` 表示全部模型，省略时默认 `["*"]` |
+| `active_for_models` | 适用于哪些 Main 模型；仅当 `"*"` 是唯一元素时表示全部模型，省略时默认 `["*"]` |
 | `run_with_model` | Shadow 自己使用的模型；省略时使用插件默认模型 |
 | `thinking_level` | Shadow 使用的 thinking level；省略时使用插件默认值，再回退到 Main 会话当前生效等级 |
 | `timeout_seconds` | Shadow 单次运行超时；省略时使用插件默认超时 |
@@ -113,7 +113,7 @@ active_for_models:
 
 `name` 只用于 `shadow-report` 和状态界面展示，不参与身份判断；省略时回退到最终解析出的 `id`。Markdown 正文就是 Shadow 的认知定义、长期职责和行为要求。
 
-`active_for_models` 绑定的是被观察的 Main 模型，`run_with_model` 则指定 Shadow 自己运行时使用的模型。匹配前由 Pi 将 Main 的别名或简写解析为完整 `provider/model-id`；第一版只支持该完整 ID 和精确值 `"*"`，不引入其他通配、正则、标签或复杂条件。模型选择优先级为：Shadow 的 `run_with_model` → 插件的 `default_shadow_model` → 激活时的当前 Main 模型。
+`active_for_models` 绑定的是被观察的 Main 模型，`run_with_model` 则指定 Shadow 自己运行时使用的模型。匹配前由 Pi 将 Main 的别名或简写解析为完整 `provider/model-id`；第一版只支持该完整 ID 和精确值 `"*"`（`"*"` 仅在作为列表唯一元素时通配，与其他显式 id 混用时按字面处理，该混合列表只精确匹配其中列出的 id），不引入其他通配、正则、标签或复杂条件。模型选择优先级为：Shadow 的 `run_with_model` → 插件的 `default_shadow_model` → 激活时的当前 Main 模型。
 
 如果显式配置的 `run_with_model` 当前不存在、未认证或不可用，本次激活失败并写入轻量运行事件，不自动换用其他模型。只有省略该字段时才使用插件默认 Shadow 模型。
 

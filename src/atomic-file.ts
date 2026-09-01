@@ -6,9 +6,9 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
  *
  * - overwrite: stage to a temp file, then rename it onto the target (atomic on POSIX and NTFS).
  * - create: claim the target exclusively so a concurrent create cannot clobber it. The preferred
- *   claim is a hard link (the file appears fully formed), but on Windows hard links require
- *   SeCreateSymbolicLinkPrivilege (administrators or developer mode); when that is unavailable
- *   (EPERM/EACCES) or the paths are on different volumes (EXDEV), fall back to an O_EXCL claim
+ *   claim is a hard link (the file appears fully formed), but hard link creation can still fail
+ *   with EPERM/EACCES on filesystems that do not support it (FAT/exFAT, some network mounts and
+ *   sandboxes); cross-volume targets fail with EXDEV. In those cases fall back to an O_EXCL claim
  *   plus copy of the staged content.
  */
 export async function atomicWriteFile(filePath: string, data: string, options: { overwrite: boolean }): Promise<void> {

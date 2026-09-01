@@ -28,6 +28,14 @@ describe("matchesModel", () => {
     expect(matchesModel(scoped, "openai/gpt")).toBe(false);
     expect(matchesModel({ ...scoped, activeForModels: ["openai/gpt"] }, "openai/gpt")).toBe(true);
   });
+
+  it("treats '*' as a wildcard only when it is the sole pattern", () => {
+    // Pinned by review round 5: a mixed list is an exact-match list, matching
+    // f4e7be7's narrowing — it does NOT act as a prefix wildcard.
+    const mixed = { ...shadow("a"), activeForModels: ["*", "openai/gpt"] };
+    expect(matchesModel(mixed, "openai/gpt")).toBe(true);
+    expect(matchesModel(mixed, "anthropic/claude")).toBe(false);
+  });
 });
 
 describe("selectCandidates", () => {

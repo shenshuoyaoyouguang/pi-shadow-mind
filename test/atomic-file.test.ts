@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { atomicWriteFile } from "../src/atomic-file.js";
 
 // Track fs.promises.link/copyFile/rename so tests can simulate hardlink-unavailable
-// platforms (Windows without SeCreateSymbolicLinkPrivilege) and publish failures.
+// platforms (filesystems where link creation fails with EPERM) and publish failures.
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   return {

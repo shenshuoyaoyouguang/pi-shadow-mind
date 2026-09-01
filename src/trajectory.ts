@@ -20,11 +20,16 @@ export function serializeTrajectory(messages: readonly MessageLike[]): string {
     }
   }
 
+  // Sanitize BEFORE flat() collapses newlines: the ROLE:-prefix line filter only
+  // works while the report still has line structure. These entries also feed the
+  // budget below, so the renderer must replay them verbatim instead of
+  // re-extracting raw content.
   const feedbackTexts: string[] = [];
   for (const message of messages) {
     if (message.role === "custom" && message.customType === "shadow-report") {
-      const text = extractText(message.content);
-      if (text) feedbackTexts.push(sanitizeReportContent(text));
+      const raw = extractRawText(message.content);
+      if (!flat(raw)) continue;
+      feedbackTexts.push(sanitizeReportContent(raw));
     }
   }
   const keptFeedback = selectShadowFeedback(feedbackTexts);
@@ -61,11 +66,9 @@ export function serializeTrajectory(messages: readonly MessageLike[]): string {
       continue;
     }
     if (message.role === "custom" && message.customType === "shadow-report") {
-      const text = extractText(message.content);
-      if (!text) continue;
       feedbackIndex += 1;
       if (keptFeedback.has(feedbackIndex)) {
-        lines.push(`SHADOW FEEDBACK: ${text}`);
+        lines.push(`SHADOW FEEDBACK: ${feedbackTexts[feedbackIndex]}`);
       } else if (!omittedMarked) {
         const omitted = feedbackTexts.length - keptFeedback.size;
         // Neutral wording: an oversized newest report can be the omitted one.
@@ -109,15 +112,17 @@ function appendText(lines: string[], label: string, content: unknown): void {
 }
 
 function extractText(content: unknown): string {
-  if (typeof content === "string") return flat(content);
+  return flat(extractRawText(content));
+}
+
+function extractRawText(content: unknown): string {
+  if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
-  return flat(
-    content
-      .filter((item): item is { type?: string; text?: string } => Boolean(item) && typeof item === "object")
-      .filter((item) => item.type === "text" && typeof item.text === "string")
-      .map((item) => item.text)
-      .join("\n"),
-  );
+  return content
+    .filter((item): item is { type?: string; text?: string } => Boolean(item) && typeof item === "object")
+    .filter((item) => item.type === "text" && typeof item.text === "string")
+    .map((item) => item.text)
+    .join("\n");
 }
 
 /** Collapse embedded whitespace/newlines so every transcript line keeps its label. */
@@ -125,7 +130,11 @@ function flat(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
-/** Strip role-injection lines a malicious shadow might embed in report content. */
+/**
+ * Strip role-injection lines a malicious shadow might embed in report content.
+ * Input must still contain newlines — run this before flat() — because the
+ * ROLE:-prefix filter matches whole lines.
+ */
 function sanitizeReportContent(text: string): string {
   return text
     .split("\n")
