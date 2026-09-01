@@ -29,7 +29,6 @@ describe("parseShadowMarkdown", () => {
       name: "Fact checker",
       enabled: true,
       debug: false,
-      activationProbability: 0.3,
       activeForModels: ["*"],
       tools: [],
     });

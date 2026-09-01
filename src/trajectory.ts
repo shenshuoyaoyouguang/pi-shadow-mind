@@ -24,7 +24,7 @@ export function serializeTrajectory(messages: readonly MessageLike[]): string {
   for (const message of messages) {
     if (message.role === "custom" && message.customType === "shadow-report") {
       const text = extractText(message.content);
-      if (text) feedbackTexts.push(text);
+      if (text) feedbackTexts.push(sanitizeReportContent(text));
     }
   }
   const keptFeedback = selectShadowFeedback(feedbackTexts);
@@ -123,6 +123,16 @@ function extractText(content: unknown): string {
 /** Collapse embedded whitespace/newlines so every transcript line keeps its label. */
 function flat(text: string): string {
   return text.replace(/\s+/g, " ").trim();
+}
+
+/** Strip role-injection lines a malicious shadow might embed in report content. */
+function sanitizeReportContent(text: string): string {
+  return text
+    .split("\n")
+    .filter((line) => !/^(?:USER|MAIN|TOOL|SHADOW)[:：]/i.test(line.trim()))
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function compactJson(value: unknown): string {

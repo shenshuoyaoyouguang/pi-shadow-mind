@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { matchesModel, selectCandidates, shouldEvaluateHeartbeat } from "../src/scheduler.js";
 import type { ShadowDefinition } from "../src/types.js";
 
-const shadow = (id: string, probability = 1): ShadowDefinition => ({
-  id, name: id, enabled: true, debug: false, activationProbability: probability,
+const shadow = (id: string): ShadowDefinition => ({
+  id, name: id, enabled: true, debug: false,
   activeForModels: ["openai/gpt"], tools: [], prompt: id, filePath: `${id}.md`,
 });
 

@@ -116,7 +116,6 @@ export function serializeShadow(shadow: ShadowDraft): string {
     ...(shadow.name !== undefined ? { name: shadow.name } : {}),
     enabled: shadow.enabled ?? true,
     debug: shadow.debug ?? false,
-    activation_probability: shadow.activationProbability ?? 0.3,
     active_for_models: shadow.activeForModels ?? ["*"],
     ...(shadow.runWithModel ? { run_with_model: shadow.runWithModel } : {}),
     ...(shadow.thinkingLevel ? { thinking_level: shadow.thinkingLevel } : {}),
@@ -128,7 +127,7 @@ export function serializeShadow(shadow: ShadowDraft): string {
 }
 
 export function describeShadow(shadow: ShadowDefinition): string {
-  return `${shadow.enabled ? "enabled" : "disabled"} ${shadow.id} (${shadow.name}) p=${shadow.activationProbability} models=${shadow.activeForModels.join(",")} tools=${shadow.tools.join(",") || "default"} file=${basename(shadow.filePath)}`;
+  return `${shadow.enabled ? "enabled" : "disabled"} ${shadow.id} (${shadow.name}) models=${shadow.activeForModels.join(",")} tools=${shadow.tools.join(",") || "default"} file=${basename(shadow.filePath)}`;
 }
 
 function definedOnly<T extends object>(value: T): Partial<T> {

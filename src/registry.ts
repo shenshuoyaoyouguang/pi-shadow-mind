@@ -3,7 +3,7 @@ import { basename, extname, join } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import YAML from "yaml";
 import type { RegistryDiagnostic, RegistrySnapshot, ShadowDefinition } from "./types.js";
-import { inRange, isFiniteNumber, isNonEmptyString, isStringArray, isThinkingLevel } from "./validation.js";
+import { isFiniteNumber, isNonEmptyString, isStringArray, isThinkingLevel } from "./validation.js";
 
 const ID_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
 
@@ -114,7 +114,6 @@ export function parseShadowMarkdown(source: string, filePath: string): ShadowDef
     name: stringValue(value.name, id, "name"),
     enabled: booleanValue(value.enabled, true, "enabled"),
     debug: booleanValue(value.debug, false, "debug"),
-    activationProbability: probabilityValue(value.activation_probability, 0.3, "activation_probability"),
     activeForModels: stringArray(value.active_for_models, ["*"], "active_for_models"),
     runWithModel: optionalString(value.run_with_model, "run_with_model"),
     thinkingLevel: optionalThinking(value.thinking_level),
@@ -137,11 +136,6 @@ function optionalString(value: unknown, name: string): string | undefined {
 function booleanValue(value: unknown, fallback: boolean, name: string): boolean {
   if (value === undefined) return fallback;
   if (typeof value !== "boolean") throw new Error(`${name} must be boolean`);
-  return value;
-}
-function probabilityValue(value: unknown, fallback: number, name: string): number {
-  if (value === undefined) return fallback;
-  if (!isFiniteNumber(value) || !inRange(value, 0, 1)) throw new Error(`${name} must be between 0 and 1`);
   return value;
 }
 function optionalPositiveNumber(value: unknown, name: string): number | undefined {

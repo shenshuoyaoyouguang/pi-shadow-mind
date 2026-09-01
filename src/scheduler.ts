@@ -43,5 +43,5 @@ export function selectCandidates(options: {
 
 export function matchesModel(shadow: ShadowDefinition, fullModelId: string): boolean {
   const patterns = shadow.activeForModels ?? ["*"];
-  return patterns.includes("*") || patterns.includes(fullModelId);
+  return (patterns.length === 1 && patterns[0] === "*") || patterns.includes(fullModelId);
 }

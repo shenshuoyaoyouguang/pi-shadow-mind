@@ -163,7 +163,7 @@ describe("EntityStore persistence integrity", () => {
       await registry.initialize();
       // Frontmatter id says "renamed", but the file is stored as other-name.md
       // and fails parsing, so neither the registry nor the canonical path finds it.
-      await writeFile(join(registry.directory, "other-name.md"), "---\nid: renamed\nactivation_probability: 5\n---\n\nPrompt body\n", "utf8");
+      await writeFile(join(registry.directory, "other-name.md"), "---\nid: renamed\nname: 123\n---\n\nPrompt body\n", "utf8");
       await expect(store.delete("renamed")).rejects.toThrow(/shadow not found: renamed/);
       // The file was never touched: a false "Deleted" report would hide it.
       const files = await readdir(registry.directory);

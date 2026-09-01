@@ -455,7 +455,7 @@ export class ShadowMindRuntime {
 }
 
 function resolveModel(ctx: ExtensionContext, fullId: string) {
-  const separator = fullId.indexOf("/");
-  if (separator <= 0 || separator === fullId.length - 1) return undefined;
-  return ctx.modelRegistry.find(fullId.slice(0, separator), fullId.slice(separator + 1));
+  const parts = fullId.split("/");
+  if (parts.length < 2) return undefined;
+  return ctx.modelRegistry.find(parts[0], parts.slice(1).join("/"));
 }

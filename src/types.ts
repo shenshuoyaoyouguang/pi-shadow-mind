@@ -19,7 +19,6 @@ export interface ShadowDefinition {
   name: string;
   enabled: boolean;
   debug: boolean;
-  activationProbability: number;
   activeForModels: string[];
   runWithModel?: string;
   thinkingLevel?: ThinkingLevel;

@@ -7,7 +7,13 @@ const BRIEF_MAX_CHARS = 400;
 
 function sanitizeBrief(brief: string): string {
   const flattened = brief.replace(/\s+/g, " ").trim().replace(/<\/?shadow-mind[^>]*>/gi, "");
-  return Array.from(flattened).slice(0, BRIEF_MAX_CHARS).join("");
+  // ponytail: removes common instruction-injection patterns; add more patterns here
+  // if the gatekeeper model produces them, or switch to an allowlist if FPs grow.
+  const stripped = flattened.replace(
+    /(?:ignore\s+(?:all\s+)?(?:previous\s+)?(?:instruct(?:ion)?s?|directives?)|disregard\s+(?:all\s+)?(?:previous\s+)?(?:instruct(?:ion)?s?|directives?)|forget\s+(?:all\s+)?(?:previous\s+)?(?:instruct(?:ion)?s?)|you\s+are\s+now(?:\s+a)?\s+(?:different|new)|you\s+have\s+no\s+(?:restrictions?|rules?)|disable\s+(?:all\s+)?safety(?:\s+checks?)?|disregard\s+your\s+(?:prior|previous|above)\s+(?:programming|instructions?|directives?|constraints?))/gi,
+    "[removed]",
+  );
+  return Array.from(stripped).slice(0, BRIEF_MAX_CHARS).join("");
 }
 
 const RUNTIME_PROTOCOL = `You are a Shadow Mind running beside the main agent.
@@ -20,10 +26,6 @@ Calling report_to_main ends this run immediately. If relevant work produces noth
 const KICKOFF = `First decide whether the trajectory is relevant to this Shadow Mind's responsibility.
 If it is unrelated, reply exactly NOT_RELEVANT and stop immediately. Do not call any tool, including report_to_main.
 If it is relevant, perform the Shadow Mind's responsibility now. Call report_to_main only when the main agent should receive a result.`;
-
-export function buildShadowSystemPrompt(mainSystemPrompt: string): string {
-  return mainSystemPrompt;
-}
 
 export function buildShadowRequest(trajectory: string, shadow: ShadowDefinition, brief?: string): string {
   const sanitized = brief ? sanitizeBrief(brief) : "";

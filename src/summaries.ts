@@ -15,6 +15,11 @@ export function summarizeToolResult(result: ToolResultLike): string {
   return result.isError ? `error · ${summary}` : summary;
 }
 
+/**
+ * Plugin extension point: register a custom summarizer for a tool result so the
+ * trajectory representation stays compact even for third-party tools.  Exported
+ * and called by plugin code, not by this package's internal modules.
+ */
 export function registerToolResultSummarizer(toolName: string, summarizer: Summarizer): void {
   summarizers.set(toolName, summarizer);
 }

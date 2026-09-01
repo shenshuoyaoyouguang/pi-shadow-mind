@@ -38,7 +38,7 @@ export function resolveShadowTools(
   return { tools, missing };
 }
 
-import { buildShadowRequest, buildShadowSystemPrompt } from "./protocol.js";
+import { buildShadowRequest } from "./protocol.js";
 import { serializeTrajectory } from "./trajectory.js";
 
 const SELF_PATH = normalize(resolve(fileURLToPath(import.meta.url)));
@@ -195,7 +195,7 @@ export class ShadowRunner {
       cwd: request.cwd,
       agentDir: request.agentDir,
       settingsManager,
-      systemPrompt: buildShadowSystemPrompt(request.mainSystemPrompt),
+      systemPrompt: request.mainSystemPrompt,
       // The inherited main system prompt already embeds APPEND_SYSTEM.md,
       // AGENTS.md and skills; keep the loader from re-discovering them so the
       // shadow context stays a strict subset (no duplication).

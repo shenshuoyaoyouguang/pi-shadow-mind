@@ -172,12 +172,15 @@ export async function runGatekeeper(options: RunGatekeeperOptions): Promise<Gate
   };
   const explicitId = options.config.gatekeeperModel ?? options.config.defaultShadowModel;
   let model = options.mainModel;
+  if (deps.modelAuthOk && !deps.modelAuthOk(model)) {
+    return fail(`gatekeeper main model ${model.provider}/${model.id} has no configured auth`);
+  }
   if (explicitId) {
     const resolved = deps.resolveModel(explicitId);
     if (!resolved) return fail(`gatekeeper model not found: ${explicitId}`);
     model = resolved;
   }
-  if (deps.modelAuthOk && !deps.modelAuthOk(model)) {
+  if (explicitId && deps.modelAuthOk && !deps.modelAuthOk(model)) {
     return fail(`gatekeeper model ${model.provider}/${model.id} has no configured auth`);
   }
   let thinkingLevel: ThinkingLevel | undefined;
