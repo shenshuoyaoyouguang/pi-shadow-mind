@@ -116,10 +116,13 @@ export function serializeShadow(shadow: ShadowDraft): string {
     ...(shadow.name !== undefined ? { name: shadow.name } : {}),
     enabled: shadow.enabled ?? true,
     debug: shadow.debug ?? false,
+    trigger: shadow.trigger ?? ["heartbeat"],
     active_for_models: shadow.activeForModels ?? ["*"],
     ...(shadow.runWithModel ? { run_with_model: shadow.runWithModel } : {}),
     ...(shadow.thinkingLevel ? { thinking_level: shadow.thinkingLevel } : {}),
     ...(shadow.timeoutSeconds !== undefined ? { timeout_seconds: shadow.timeoutSeconds } : {}),
+    ...(shadow.finalResponseRounds !== undefined ? { final_response_rounds: shadow.finalResponseRounds } : {}),
+    ...(shadow.activationTools && shadow.activationTools.length ? { activation_tools: shadow.activationTools } : {}),
     tools: shadow.tools ?? [],
     ...(shadow.extraFields ?? {}),
   };
@@ -127,7 +130,9 @@ export function serializeShadow(shadow: ShadowDraft): string {
 }
 
 export function describeShadow(shadow: ShadowDefinition): string {
-  return `${shadow.enabled ? "enabled" : "disabled"} ${shadow.id} (${shadow.name}) models=${shadow.activeForModels.join(",")} tools=${shadow.tools.join(",") || "default"} file=${basename(shadow.filePath)}`;
+  const actTools = shadow.activationTools.length ? ` act_tools=${shadow.activationTools.join(",")}` : "";
+  const finalRounds = shadow.finalResponseRounds ? ` final_rounds=${shadow.finalResponseRounds}` : "";
+  return `${shadow.enabled ? "enabled" : "disabled"} ${shadow.id} (${shadow.name}) trigger=${shadow.trigger.join(",")} models=${shadow.activeForModels.join(",")}${finalRounds}${actTools} tools=${shadow.tools.join(",") || "default"} file=${basename(shadow.filePath)}`;
 }
 
 function definedOnly<T extends object>(value: T): Partial<T> {

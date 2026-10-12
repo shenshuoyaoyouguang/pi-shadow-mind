@@ -14,8 +14,18 @@ const mock = vi.hoisted(() => {
   class FakeSession {
     messages: Record<string, unknown>[] = [
       // Simulates the injected main-session trajectory (tool results present).
-      { role: "toolResult", toolName: "read", isError: false, toolCallId: "traj-1" },
-      { role: "toolResult", toolName: "grep", isError: false, toolCallId: "traj-2" },
+      {
+        role: "toolResult",
+        toolName: "read",
+        isError: false,
+        toolCallId: "traj-1",
+      },
+      {
+        role: "toolResult",
+        toolName: "grep",
+        isError: false,
+        toolCallId: "traj-2",
+      },
     ];
     sessionFile = "/tmp/fake/session.jsonl";
     aborted = false;
@@ -30,7 +40,9 @@ const mock = vi.hoisted(() => {
     }
 
     getActiveToolNames(): string[] {
-      return (this.options.tools ?? []).filter((name: string) => !name.startsWith("missing-"));
+      return (this.options.tools ?? []).filter(
+        (name: string) => !name.startsWith("missing-"),
+      );
     }
 
     async prompt(): Promise<void> {
@@ -43,8 +55,18 @@ const mock = vi.hoisted(() => {
         this.messages.push({
           role: "assistant",
           usage: {
-            input: 5, output: 3, cacheRead: 0, cacheWrite: 0, totalTokens: 8,
-            cost: { input: 0.005, output: 0.003, cacheRead: 0, cacheWrite: 0, total: 0.008 },
+            input: 5,
+            output: 3,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 8,
+            cost: {
+              input: 0.005,
+              output: 0.003,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 0.008,
+            },
           },
         });
         await new Promise<void>((resolve, reject) => {
@@ -56,8 +78,18 @@ const mock = vi.hoisted(() => {
         this.messages.push({
           role: "assistant",
           usage: {
-            input: 2, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 3,
-            cost: { input: 0.002, output: 0.001, cacheRead: 0, cacheWrite: 0, total: 0.003 },
+            input: 2,
+            output: 1,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 3,
+            cost: {
+              input: 0.002,
+              output: 0.001,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 0.003,
+            },
           },
         });
         throw this.promptError ?? new Error("prompt failed");
@@ -93,19 +125,49 @@ const mock = vi.hoisted(() => {
         this.messages.push({
           role: "assistant",
           usage: {
-            input: 10, output: 20, cacheRead: 30, cacheWrite: 40, totalTokens: 100,
-            cost: { input: 0.01, output: 0.02, cacheRead: 0.03, cacheWrite: 0.04, total: 0.1 },
+            input: 10,
+            output: 20,
+            cacheRead: 30,
+            cacheWrite: 40,
+            totalTokens: 100,
+            cost: {
+              input: 0.01,
+              output: 0.02,
+              cacheRead: 0.03,
+              cacheWrite: 0.04,
+              total: 0.1,
+            },
           },
         });
-        this.messages.push({ role: "toolResult", toolName: "write", isError: false, toolCallId: "own-1" });
+        this.messages.push({
+          role: "toolResult",
+          toolName: "write",
+          isError: false,
+          toolCallId: "own-1",
+        });
         this.messages.push({
           role: "assistant",
           usage: {
-            input: 1, output: 2, cacheRead: 3, cacheWrite: 4, totalTokens: 10,
-            cost: { input: 0.001, output: 0.002, cacheRead: 0.003, cacheWrite: 0.004, total: 0.01 },
+            input: 1,
+            output: 2,
+            cacheRead: 3,
+            cacheWrite: 4,
+            totalTokens: 10,
+            cost: {
+              input: 0.001,
+              output: 0.002,
+              cacheRead: 0.003,
+              cacheWrite: 0.004,
+              total: 0.01,
+            },
           },
         });
-        this.messages.push({ role: "toolResult", toolName: "write", isError: true, toolCallId: "own-2" });
+        this.messages.push({
+          role: "toolResult",
+          toolName: "write",
+          isError: true,
+          toolCallId: "own-2",
+        });
       }
     }
 
@@ -120,18 +182,29 @@ const mock = vi.hoisted(() => {
       this.disposed = true;
     }
   }
-  return { FakeSession, sessions: [] as FakeSession[], createAgentSession: vi.fn() };
+  return {
+    FakeSession,
+    sessions: [] as FakeSession[],
+    createAgentSession: vi.fn(),
+  };
 });
 
 vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@earendil-works/pi-coding-agent")>();
+  const actual =
+    await importOriginal<typeof import("@earendil-works/pi-coding-agent")>();
   return { ...actual, createAgentSession: mock.createAgentSession };
 });
 
 const fakeModel = {
-  provider: "test", id: "model", api: "openai-completions", baseUrl: "http://test", reasoning: true,
-  input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 100000, maxTokens: 1000,
+  provider: "test",
+  id: "model",
+  api: "openai-completions",
+  baseUrl: "http://test",
+  reasoning: true,
+  input: ["text"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 100000,
+  maxTokens: 1000,
   thinkingLevelMap: { minimal: null, low: null, medium: null, high: "high" },
 } as any;
 
@@ -139,10 +212,31 @@ let tmp: string;
 let behavior: InstanceType<typeof mock.FakeSession>["behavior"] = "silent";
 let promptError: Error | undefined;
 
-function makeRequest(overrides: Partial<ShadowRunRequest> = {}): ShadowRunRequest {
+function makeRequest(
+  overrides: Partial<ShadowRunRequest> = {},
+): ShadowRunRequest {
   return {
-    shadow: { id: "s", name: "S", enabled: true, debug: false, activeForModels: ["*"], tools: [], prompt: "test", filePath: "s.md" },
-    config: { maxParallelShadows: 2, defaultShadowTimeoutSeconds: 60, headlessDrainTimeoutSeconds: 120, resultBatchWindowMs: 400, defaultThinkingLevel: "low" },
+    shadow: {
+      id: "s",
+      name: "S",
+      enabled: true,
+      debug: false,
+      trigger: ["heartbeat"],
+      activeForModels: ["*"],
+      tools: [],
+      activationTools: [],
+      prompt: "test",
+      filePath: "s.md",
+    },
+    config: {
+      heartbeatTools: [],
+      maxParallelShadows: 2,
+      defaultShadowTimeoutSeconds: 60,
+      headlessDrainTimeoutSeconds: 120,
+      resultBatchWindowMs: 400,
+      excludedExtensions: [],
+      defaultThinkingLevel: "low",
+    },
     epoch: 1,
     runId: "run-1",
     cwd: tmp,
@@ -199,9 +293,15 @@ describe("ShadowRunner.run integration", () => {
     const session = mock.sessions[0];
     expect(result.reason).toBe("report");
     expect(result.thinkingLevel).toBe("high");
-    expect(onReport).toHaveBeenCalledWith(expect.objectContaining({
-      shadowId: "s", shadowName: "S", content: "found a smell", epoch: 1, runId: "run-1",
-    }));
+    expect(onReport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        shadowId: "s",
+        shadowName: "S",
+        content: "found a smell",
+        epoch: 1,
+        runId: "run-1",
+      }),
+    );
     expect(session.aborted).toBe(true);
     expect(session.disposed).toBe(true);
   });
@@ -213,7 +313,9 @@ describe("ShadowRunner.run integration", () => {
     expect(result.reason).toBe("silent");
     expect(result.toolCalls).toBe(2);
     expect(result.toolFailures).toBe(1);
-    expect(result.toolStats).toEqual([{ tool: "write", calls: 2, failures: 1 }]);
+    expect(result.toolStats).toEqual([
+      { tool: "write", calls: 2, failures: 1 },
+    ]);
     expect(result.usage).toEqual({
       requests: 2,
       input: 11,
@@ -221,19 +323,31 @@ describe("ShadowRunner.run integration", () => {
       cacheRead: 33,
       cacheWrite: 44,
       totalTokens: 110,
-      cost: { input: 0.011, output: 0.022, cacheRead: 0.033, cacheWrite: 0.044, total: 0.11 },
+      cost: {
+        input: 0.011,
+        output: 0.022,
+        cacheRead: 0.033,
+        cacheWrite: 0.044,
+        total: 0.11,
+      },
     });
   });
 
   it("reports missing tools that did not materialize in the session", async () => {
     const runner = new ShadowRunner();
-    const result = await runner.run(makeRequest({ tools: ["read", "missing-x", "report_to_main"] }));
+    const result = await runner.run(
+      makeRequest({ tools: ["read", "missing-x", "report_to_main"] }),
+    );
     expect(result.missingTools).toEqual(["missing-x"]);
   });
 
   it("resolves the thinking level with fallback and passes it to createAgentSession", async () => {
     const runner = new ShadowRunner();
-    const result = await runner.run(makeRequest({ shadow: { ...makeRequest().shadow, thinkingLevel: "medium" } }));
+    const result = await runner.run(
+      makeRequest({
+        shadow: { ...makeRequest().shadow, thinkingLevel: "medium" },
+      }),
+    );
     expect(result.thinkingLevel).toBe("high");
     expect(mock.sessions[0].options.thinkingLevel).toBe("high");
   });
@@ -242,11 +356,20 @@ describe("ShadowRunner.run integration", () => {
     const runner = new ShadowRunner();
     const onReport = vi.fn();
     behavior = "hang";
-    const result = await runner.run(makeRequest({ onReport, config: { ...makeRequest().config, defaultShadowTimeoutSeconds: 0.05 } }));
+    const result = await runner.run(
+      makeRequest({
+        onReport,
+        config: { ...makeRequest().config, defaultShadowTimeoutSeconds: 0.05 },
+      }),
+    );
     const session = mock.sessions[0];
     expect(result.reason).toBe("timeout");
     expect(result.durationMs).toBeGreaterThan(0);
-    expect(result.usage).toMatchObject({ requests: 1, totalTokens: 8, cost: { total: 0.008 } });
+    expect(result.usage).toMatchObject({
+      requests: 1,
+      totalTokens: 8,
+      cost: { total: 0.008 },
+    });
     expect(session.aborted).toBe(true);
     expect(onReport).not.toHaveBeenCalled();
   });
@@ -259,7 +382,11 @@ describe("ShadowRunner.run integration", () => {
     const session = mock.sessions[0];
     expect(result.reason).toBe("error");
     expect(result.error).toBe("boom");
-    expect(result.usage).toMatchObject({ requests: 1, totalTokens: 3, cost: { total: 0.003 } });
+    expect(result.usage).toMatchObject({
+      requests: 1,
+      totalTokens: 3,
+      cost: { total: 0.003 },
+    });
     expect(session.disposed).toBe(true);
   });
 
@@ -274,7 +401,11 @@ describe("ShadowRunner.run integration", () => {
     expect(result.reason).toBe("aborted");
     expect(session.aborted).toBe(true);
     expect(result.toolCalls).toBe(0);
-    expect(result.usage).toMatchObject({ requests: 1, totalTokens: 8, cost: { total: 0.008 } });
+    expect(result.usage).toMatchObject({
+      requests: 1,
+      totalTokens: 8,
+      cost: { total: 0.008 },
+    });
   });
 
   it("accepts trajectories that fit under the chars/4 token estimate", async () => {

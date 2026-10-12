@@ -22,6 +22,18 @@ describe("resolveShadowTools", () => {
     expect(missing).toEqual(["nonexistent-tool"]);
   });
 
+  it("grants every tool currently available when the whitelist contains a wildcard", () => {
+    const { tools, missing } = resolveShadowTools(["*"], fullRegistry);
+    expect(tools).toEqual([...fullRegistry]);
+    expect(missing).toEqual([]);
+  });
+
+  it("always keeps report_to_main with wildcard access when it is not available", () => {
+    const { tools, missing } = resolveShadowTools(["*"], new Set(["custom-tool"]));
+    expect(tools).toEqual(["custom-tool", "report_to_main"]);
+    expect(missing).toEqual([]);
+  });
+
   it("always keeps report_to_main even when it is not in the available set", () => {
     const { tools, missing } = resolveShadowTools([], new Set(["read"]));
     expect(tools).toEqual(["read", "report_to_main"]);

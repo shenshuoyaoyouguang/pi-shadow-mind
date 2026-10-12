@@ -2,8 +2,14 @@ import { lstat, mkdir, readFile, readdir, stat } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import YAML from "yaml";
-import type { RegistryDiagnostic, RegistrySnapshot, ShadowDefinition } from "./types.js";
-import { isFiniteNumber, isNonEmptyString, isStringArray, isThinkingLevel } from "./validation.js";
+import {
+  SHADOW_TRIGGERS,
+  type RegistryDiagnostic,
+  type RegistrySnapshot,
+  type ShadowDefinition,
+  type ShadowTrigger,
+} from "./types.js";
+import { cleanStringArray, isFiniteNumber, isNonEmptyString, isThinkingLevel } from "./validation.js";
 
 const ID_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
 
@@ -13,10 +19,13 @@ const KNOWN_SHADOW_KEYS = new Set([
   "enabled",
   "debug",
   "activation_probability",
+  "trigger",
   "active_for_models",
   "run_with_model",
   "thinking_level",
   "timeout_seconds",
+  "final_response_rounds",
+  "activation_tools",
   "tools",
 ]);
 
@@ -114,11 +123,14 @@ export function parseShadowMarkdown(source: string, filePath: string): ShadowDef
     name: stringValue(value.name, id, "name"),
     enabled: booleanValue(value.enabled, true, "enabled"),
     debug: booleanValue(value.debug, false, "debug"),
-    activeForModels: stringArray(value.active_for_models, ["*"], "active_for_models"),
+    trigger: triggerArray(value.trigger, ["heartbeat"], "trigger"),
+    activeForModels: cleanStringArray(value.active_for_models, ["*"], "active_for_models"),
     runWithModel: optionalString(value.run_with_model, "run_with_model"),
     thinkingLevel: optionalThinking(value.thinking_level),
     timeoutSeconds: optionalPositiveNumber(value.timeout_seconds, "timeout_seconds"),
-    tools: stringArray(value.tools, [], "tools"),
+    finalResponseRounds: optionalNonNegativeInteger(value.final_response_rounds, "final_response_rounds"),
+    activationTools: cleanStringArray(value.activation_tools, [], "activation_tools"),
+    tools: cleanStringArray(value.tools, [], "tools"),
     prompt,
     filePath,
     ...(Object.keys(extraFields).length ? { extraFields } : {}),
@@ -143,10 +155,18 @@ function optionalPositiveNumber(value: unknown, name: string): number | undefine
   if (!isFiniteNumber(value) || value <= 0) throw new Error(`${name} must be positive`);
   return value;
 }
-function stringArray(value: unknown, fallback: string[], name: string): string[] {
-  if (value === undefined) return [...fallback];
-  if (!isStringArray(value)) throw new Error(`${name} must be an array of non-empty strings`);
-  return [...new Set(value.map((item) => item.trim()))];
+function optionalNonNegativeInteger(value: unknown, name: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (!isFiniteNumber(value) || !Number.isInteger(value) || value < 0) throw new Error(`${name} must be a non-negative integer`);
+  return value;
+}
+function triggerArray(value: unknown, fallback: ShadowTrigger[], name: string): ShadowTrigger[] {
+  const values = typeof value === "string" ? [value] : value;
+  const items = cleanStringArray(values, fallback, name);
+  const allowed = new Set<string>(SHADOW_TRIGGERS);
+  const invalid = items.filter((item) => !allowed.has(item));
+  if (invalid.length) throw new Error(`${name} contains invalid trigger: ${invalid.join(", ")}`);
+  return items as ShadowTrigger[];
 }
 function optionalThinking(value: unknown): ThinkingLevel | undefined {
   if (value === undefined) return undefined;

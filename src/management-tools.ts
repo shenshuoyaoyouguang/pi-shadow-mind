@@ -1,26 +1,37 @@
 import { Type } from "typebox";
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { THINKING_LEVELS } from "./validation.js";
-import type { ShadowConfig } from "./types.js";
+import type { ShadowConfig, ShadowTrigger } from "./types.js";
 import { parseConfig } from "./config.js";
 import { describeShadow, type EntityStore } from "./entity-store.js";
 
 const ID = Type.String({ pattern: "^[a-z0-9][a-z0-9_-]*$" });
 const THINKING = Type.Union([...THINKING_LEVELS].map((level) => Type.Literal(level)));
+const TRIGGER = Type.Union([
+  Type.Literal("heartbeat"),
+  Type.Literal("final_response"),
+]);
 const NON_EMPTY = Type.String({ minLength: 1, pattern: ".*\\S.*" });
 const SHADOW_FIELDS = {
   name: Type.Optional(Type.String({ minLength: 1, pattern: ".*\\S.*" })),
   enabled: Type.Optional(Type.Boolean()),
   debug: Type.Optional(Type.Boolean()),
+  trigger: Type.Optional(Type.Array(TRIGGER)),
   active_for_models: Type.Optional(Type.Array(Type.String())),
   run_with_model: Type.Optional(Type.String({ minLength: 1, pattern: ".*\\S.*" })),
   thinking_level: Type.Optional(THINKING),
   timeout_seconds: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
+  final_response_rounds: Type.Optional(Type.Integer({ minimum: 0 })),
+  activation_tools: Type.Optional(Type.Array(Type.String())),
   tools: Type.Optional(Type.Array(Type.String())),
   prompt: Type.Optional(Type.String({ minLength: 1, pattern: ".*\\S.*" })),
 };
 
-export function registerManagementTools(pi: ExtensionAPI, store: EntityStore, getConfig: () => ShadowConfig): void {
+export function registerManagementTools(
+  pi: ExtensionAPI,
+  store: EntityStore,
+  getConfig: () => ShadowConfig,
+): void {
   pi.registerTool(listTool(store));
   pi.registerTool(createTool(store));
   pi.registerTool(updateTool(store));
@@ -32,10 +43,20 @@ export function registerManagementTools(pi: ExtensionAPI, store: EntityStore, ge
 }
 
 function listTool(store: EntityStore): ToolDefinition {
-  return tool("list_shadows", "List Shadows", "List all valid globally configured Shadow Minds.", Type.Object({}), async () => {
-    const shadows = await store.list();
-    return textResult(shadows.length ? shadows.map(describeShadow).join("\n") : "No Shadow Minds configured.");
-  });
+  return tool(
+    "list_shadows",
+    "List Shadows",
+    "List all valid globally configured Shadow Minds.",
+    Type.Object({}),
+    async () => {
+      const shadows = await store.list();
+      return textResult(
+        shadows.length
+          ? shadows.map(describeShadow).join("\n")
+          : "No Shadow Minds configured.",
+      );
+    },
+  );
 }
 
 function createTool(store: EntityStore): ToolDefinition {
@@ -105,10 +126,12 @@ function configWriteTool(store: EntityStore, getConfig: () => ShadowConfig): Too
   // other way back to default_shadow_model / the main model.
   const modelField = Type.Optional(Type.Union([Type.String(), Type.Null()]));
   return tool("update_shadow_config", "Update Shadow Config", "Update global Shadow Mind runtime configuration after user confirmation. Pass null for a model field to clear it.", Type.Object({
+    heartbeat_tools: Type.Optional(Type.Array(Type.String())),
     max_parallel_shadows: Type.Optional(Type.Integer({ minimum: 1 })),
     default_shadow_timeout_seconds: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
     headless_drain_timeout_seconds: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
     result_batch_window_ms: Type.Optional(Type.Integer({ minimum: 0 })),
+    excluded_extensions: Type.Optional(Type.Array(Type.String())),
     default_shadow_model: modelField,
     default_thinking_level: Type.Optional(THINKING),
     gatekeeper_model: modelField,
@@ -119,10 +142,12 @@ function configWriteTool(store: EntityStore, getConfig: () => ShadowConfig): Too
       const next = parseConfig({
         // Unknown keys from the current file must survive the round-trip.
         ...(current.extraFields ?? {}),
+        heartbeat_tools: raw.heartbeat_tools ?? current.heartbeatTools,
         max_parallel_shadows: raw.max_parallel_shadows ?? current.maxParallelShadows,
         default_shadow_timeout_seconds: raw.default_shadow_timeout_seconds ?? current.defaultShadowTimeoutSeconds,
         headless_drain_timeout_seconds: raw.headless_drain_timeout_seconds ?? current.headlessDrainTimeoutSeconds,
         result_batch_window_ms: raw.result_batch_window_ms ?? current.resultBatchWindowMs,
+        excluded_extensions: raw.excluded_extensions ?? current.excludedExtensions,
         default_shadow_model: raw.default_shadow_model === null ? undefined : raw.default_shadow_model ?? current.defaultShadowModel,
         default_thinking_level: raw.default_thinking_level ?? current.defaultThinkingLevel,
         gatekeeper_model: raw.gatekeeper_model === null ? undefined : raw.gatekeeper_model ?? current.gatekeeperModel,
@@ -136,12 +161,25 @@ function configWriteTool(store: EntityStore, getConfig: () => ShadowConfig): Too
   });
 }
 
-function tool(name: string, label: string, description: string, parameters: any, execute: ToolDefinition["execute"]): ToolDefinition {
+function tool(
+  name: string,
+  label: string,
+  description: string,
+  parameters: any,
+  execute: ToolDefinition["execute"],
+): ToolDefinition {
   return { name, label, description, parameters, execute };
 }
 
-async function confirm(ctx: Parameters<ToolDefinition["execute"]>[4], title: string, message: string): Promise<boolean> {
-  if (!ctx.hasUI) throw new Error("This write requires a UI confirmation, but no dialog-capable UI is available.");
+async function confirm(
+  ctx: Parameters<ToolDefinition["execute"]>[4],
+  title: string,
+  message: string,
+): Promise<boolean> {
+  if (!ctx.hasUI)
+    throw new Error(
+      "This write requires a UI confirmation, but no dialog-capable UI is available.",
+    );
   return ctx.ui.confirm(title, message);
 }
 
@@ -158,10 +196,13 @@ function toPatch(raw: Record<string, unknown>) {
     name: raw.name as string | undefined,
     enabled: raw.enabled as boolean | undefined,
     debug: raw.debug as boolean | undefined,
+    trigger: raw.trigger as ShadowTrigger[] | undefined,
     activeForModels: raw.active_for_models as string[] | undefined,
     runWithModel: raw.run_with_model as string | undefined,
     thinkingLevel: raw.thinking_level as any,
     timeoutSeconds: raw.timeout_seconds as number | undefined,
+    finalResponseRounds: raw.final_response_rounds as number | undefined,
+    activationTools: raw.activation_tools as string[] | undefined,
     tools: raw.tools as string[] | undefined,
     prompt: raw.prompt as string | undefined,
   };

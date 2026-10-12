@@ -108,7 +108,7 @@ function makeCtx(pi: PiHarness, overrides: Record<string, unknown> = {}): Extens
       setStatus: (_key: string, text: string | undefined) => pi.statuses.push(text),
       setWidget: vi.fn(),
     },
-    sessionManager: { getEntries: () => [], getLeafId: () => undefined },
+    sessionManager: { getEntries: () => [], getLeafId: () => undefined, getSessionFile: () => undefined },
     modelRegistry: { hasConfiguredAuth: () => true, isUsingOAuth: () => true, find: () => fakeModel },
     model: fakeModel,
     thinkingLevel: "low",

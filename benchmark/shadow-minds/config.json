@@ -1,9 +1,0 @@
-{
-  "heartbeat_probability": 0.3333333333333333,
-  "max_parallel_shadows": 2,
-  "default_shadow_timeout_seconds": 60,
-  "headless_drain_timeout_seconds": 240,
-  "result_batch_window_ms": 400,
-  "default_shadow_model": "deepseek/deepseek-v4-flash",
-  "default_thinking_level": "high"
-}

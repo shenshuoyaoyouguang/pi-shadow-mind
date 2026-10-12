@@ -68,13 +68,15 @@ Report only concrete, actionable issues grounded in the visible trajectory or
 repository. If the current work is unrelated, do not intervene.
 ```
 
-This Shadow is read-only. It reviews the implementation in parallel and reports concrete architectural concerns without taking control of the main task.
+This Shadow is read-only. It reviews the implementation in parallel and reports concrete architectural concerns without taking control of the main task. Tool names extend the default read-only set; use `tools: ["*"]` only when the Shadow should inherit every tool currently registered in the main session, including tools added later.
 
 ### How it works
 
 After a main-agent `turn_end` that completed at least one tool call, the extension calls a lightweight gatekeeper model once with the sanitized trajectory and every candidate Shadow's responsibility summary. Pure text-only conversation turns are skipped, so ordinary discussion does not wake Shadows. The gatekeeper decides which Shadows to wake—possibly none—and attaches a one-sentence focus hint to each. At most two Shadows run concurrently.
 
 If the gatekeeper fails (bad output, timeout, missing auth), the turn is skipped and logged; there is no random fallback.
+
+Use `trigger: [final_response]` for completion review. It activates after the main agent has emitted its final text and bypasses the gatekeeper. All checks for that final response finish before their findings are sent together through one `shadow-report` follow-up, so a slow sibling cannot leak into a revised answer. Set the per-Shadow `final_response_rounds` to limit execution rounds after completion: `1` allows at most one round to prevent feedback loops, while omitted or `0` means unlimited. `trigger: [heartbeat, final_response]` enables both modes; `heartbeat` is the default and routes through the gatekeeper. `max_parallel_shadows` remains the concurrency limit; excess final-response checks are queued rather than skipped.
 
 Each activation starts a fresh temporary session. It inherits the main agent's unchanged system prompt but receives only a sanitized plain-text trajectory: assistant thinking is removed, while tool calls retain compact, deterministic result summaries.
 
@@ -101,7 +103,13 @@ On the first session start, the extension creates:
 
 No default Shadow Mind is created. The global runtime timeout defaults to 300 seconds, and individual Shadows may override it with `timeout_seconds`.
 
-Press `Alt+S` to pause or resume Shadow Mind for the current session. The paused footer reads `🐙 Paused` without a redundant zero count. Use `/shadow` to toggle the status panel, `/shadow status` for a summary, or `/shadow toggle`, `/shadow pause`, and `/shadow resume` for command-based control. Management tools can list, create, update, enable, disable, and delete Shadow Minds, as well as read or update the global configuration. Every write requires user confirmation.
+A Shadow session loads the same extensions as the main session, minus this plugin and anything listed in `excluded_extensions`. Extensions that archive or record whole sessions would otherwise file every Shadow run as one more user session, so `pi-experiencev2` is excluded by default. An entry is an exact identifier, not a pattern: a package name (`pi-experiencev2`, `@scope/name`), a package directory name, a single-file extension's file name, or an absolute path. Set `"excluded_extensions": []` to load everything the main session loads. Shadows need their model provider, so keep provider extensions off this list.
+
+Press `F6` or `Alt+S` to pause or resume Shadow Mind for the current session. On macOS, you may need `Fn+F6`; `Alt+S` corresponds to `Option+S` and depends on the terminal's Option key mapping. The paused footer reads `🐙 Paused` without a redundant zero count. Use `/shadow` to toggle the status panel, `/shadow status` for a summary, or `/shadow toggle`, `/shadow pause`, and `/shadow resume` for command-based control. In TUI mode, `/shadow reports` opens a bounded, scrollable viewer for the five most recently delivered reports, independent of the recent-run list. Use ↑/↓, PageUp/PageDown, or Home/End to scroll; Escape or `/shadow reports hide` closes it. The viewer shows a snapshot; reopen to see new deliveries. Report history is session-local and clears on session replacement or reload; persisted reports remain in the conversation. The status panel keeps its compact summary. Management tools can list, create, update, enable, disable, and delete Shadow Minds, as well as read or update the global configuration. Every write requires user confirmation.
+
+### Using with DSH
+
+To use Shadow Mind in DSH, see [`whutzefengxie-ops/dsh-shadow-mind`](https://github.com/whutzefengxie-ops/dsh-shadow-mind). That project provides the DSH-specific integration.
 
 For development:
 
@@ -169,13 +177,15 @@ tools: [read, grep]
 无关，不要介入。
 ```
 
-这个 Shadow 默认只读。它会在实现过程中并行审阅架构，并向主 Agent 报告具体问题，但不会接管主任务。
+这个 Shadow 默认只读。它会在实现过程中并行审阅架构，并向主 Agent 报告具体问题，但不会接管主任务。工具名在默认只读集合之上扩展；仅当 Shadow 需要继承主 Session 当前注册的全部工具（包括后续新增的工具）时才使用 `tools: ["*"]`。
 
 ### 工作方式
 
 主 Agent 的一次 `turn_end` 只有在该轮至少完成过一个工具调用时，扩展才会调用一次轻量门卫模型，输入净化后的轨迹和所有候选 Shadow 的职责摘要。纯文本对话轮次会被跳过，因此普通讨论不会唤醒 Shadow。门卫决定本次唤醒哪些 Shadow（也可以一个都不唤醒），并为每个被唤醒的 Shadow 附上一句话焦点提示。默认最多同时运行两个。
 
 门卫失败（输出无法解析、超时、模型未认证）时本轮直接跳过并记录事件，不回退随机调度。
+
+使用 `trigger: [final_response]` 进行完成度审阅。它在主 Agent 输出最终文字后激活，绕过门卫。同一最终回复的所有检查完成后，发现才会通过一次 `shadow-report` follow-up 一起发送，因此较慢的同批检查不会泄漏到已修订的回答中。通过每个 Shadow 的 `final_response_rounds` 限制完成后的运行轮数：设为 `1` 时仅运行一轮以避免反馈循环，缺省或 `0` 表示不限制。`trigger: [heartbeat, final_response]` 同时启用两种模式；`heartbeat` 是默认值，经由门卫分派。`max_parallel_shadows` 仍是并发上限，超额的最终回复检查进入队列而非被跳过。
 
 每次激活都会创建一个全新的临时 Session。它继承主 Agent 原封不动的 system prompt，但只接收净化后的文本轨迹：思考内容会被移除，工具调用后仅保留简洁、确定性的结果概述。
 
@@ -202,7 +212,13 @@ pi install npm:pi-shadow-mind@0.2.0
 
 扩展不会默认创建 Shadow Mind。全局默认运行超时为 300 秒，单个 Shadow 可以通过 `timeout_seconds` 覆盖。
 
-按 `Alt+S` 可以暂停或恢复当前 Session 的 Shadow Mind。暂停时底部状态显示为 `🐙 Paused`，不再显示没有信息量的零计数。使用 `/shadow` 显示或隐藏状态面板，`/shadow status` 查看摘要，也可以通过 `/shadow toggle`、`/shadow pause` 和 `/shadow resume` 控制状态。管理工具可以查询、创建、更新、启用、禁用和删除 Shadow Mind，以及读取或修改全局配置。所有写操作都需要用户确认。
+Shadow Session 加载的扩展是主 Session 的子集：去掉本插件自身，再去掉 `excluded_extensions` 列出的扩展。归档或记录整段会话的扩展否则会把每次 Shadow 运行都记为一次新的用户会话，因此默认排除 `pi-experiencev2`。条目是精确标识而非模式：包名（`pi-experiencev2`、`@scope/name`）、包目录名、单文件扩展的文件名或绝对路径。设为 `"excluded_extensions": []` 即加载主 Session 的全部扩展。Shadow 需要模型 provider 扩展，因此不要把 provider 扩展列入该清单。
+
+按 `F6` 或 `Alt+S` 可以暂停或恢复当前 Session 的 Shadow Mind。在 macOS 上可能需要 `Fn+F6`；`Alt+S` 对应 `Option+S`，取决于终端的 Option 键映射。暂停时底部状态显示为 `🐙 Paused`，不再显示没有信息量的零计数。使用 `/shadow` 显示或隐藏状态面板，`/shadow status` 查看摘要，也可以通过 `/shadow toggle`、`/shadow pause` 和 `/shadow resume` 控制状态。在 TUI 模式下，`/shadow reports` 打开一个有界、可滚动的查看器，展示最近 5 份已交付报告，与最近运行列表相互独立。用 ↑/↓、PageUp/PageDown 或 Home/End 滚动；Escape 或 `/shadow reports hide` 关闭。查看器展示的是快照，重新打开可看到新交付。报告历史仅存在于当前 Session，在会话替换或重载时清空；已持久化的报告仍保留在会话中。状态面板保持紧凑摘要。管理工具可以查询、创建、更新、启用、禁用和删除 Shadow Mind，以及读取或修改全局配置。所有写操作都需要用户确认。
+
+### 与 DSH 配合使用
+
+在 DSH 中使用 Shadow Mind，参见 [`whutzefengxie-ops/dsh-shadow-mind`](https://github.com/whutzefengxie-ops/dsh-shadow-mind)。该项目提供 DSH 专属集成。
 
 开发模式：
 

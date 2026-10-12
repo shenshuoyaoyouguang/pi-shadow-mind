@@ -3,10 +3,13 @@ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 export const DEFAULT_READ_TOOLS = ["read", "grep", "find", "ls"] as const;
 
 export interface ShadowConfig {
+  heartbeatTools: string[];
   maxParallelShadows: number;
   defaultShadowTimeoutSeconds: number;
   headlessDrainTimeoutSeconds: number;
   resultBatchWindowMs: number;
+  /** Extensions a Shadow session must not load, by name or path. */
+  excludedExtensions: string[];
   defaultShadowModel?: string;
   /** Gatekeeper model full id; omitted → defaultShadowModel → main model. */
   gatekeeperModel?: string;
@@ -14,16 +17,22 @@ export interface ShadowConfig {
   extraFields?: Record<string, unknown>;
 }
 
+export const SHADOW_TRIGGERS = ["heartbeat", "final_response"] as const;
+export type ShadowTrigger = (typeof SHADOW_TRIGGERS)[number];
+
 export interface ShadowDefinition {
   id: string;
   name: string;
   enabled: boolean;
   debug: boolean;
+  trigger: ShadowTrigger[];
   activeForModels: string[];
   runWithModel?: string;
   thinkingLevel?: ThinkingLevel;
   timeoutSeconds?: number;
+  finalResponseRounds?: number;
   tools: string[];
+  activationTools: string[];
   prompt: string;
   filePath: string;
   /** Unknown frontmatter keys preserved verbatim across round-trips. */
@@ -55,4 +64,15 @@ export interface RuntimeEvent {
   kind: string;
   epoch: number;
   data?: Record<string, unknown>;
+}
+
+export interface ShadowActivationDecision {
+  activated: Array<{ shadow: ShadowDefinition; roll: number }>;
+  candidates: Array<{ shadowId: string; roll: number; selected: boolean }>;
+  /** Shadow ids excluded because active_for_models did not match the main model. */
+  modelFiltered: string[];
+  /** Shadow ids excluded because the same shadow is already running. */
+  runningExcluded: string[];
+  /** Shadow ids excluded because their final-response round limit was reached. */
+  roundFiltered: string[];
 }

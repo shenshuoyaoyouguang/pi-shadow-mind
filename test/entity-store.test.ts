@@ -52,7 +52,7 @@ describe("EntityStore persistence integrity", () => {
       expect(files2.filter((f) => f.includes(".tmp"))).toEqual([]);
       const content2 = await readFile(join(dir, "a1.md"), "utf8");
       expect(content2).toContain("Prompt A updated");
-      await store.writeConfig({ maxParallelShadows: 2, defaultShadowTimeoutSeconds: 300, headlessDrainTimeoutSeconds: 120, resultBatchWindowMs: 400, defaultThinkingLevel: "low" });
+      await store.writeConfig({ heartbeatTools: [], maxParallelShadows: 2, defaultShadowTimeoutSeconds: 300, headlessDrainTimeoutSeconds: 120, resultBatchWindowMs: 400, excludedExtensions: [], defaultThinkingLevel: "low" });
       const cfg = await readFile(join(dir, "config.json"), "utf8");
       expect(cfg).toContain("max_parallel_shadows");
       const files3 = await readdir(dir);
@@ -285,7 +285,7 @@ describe("EntityStore persistence integrity", () => {
       await writeFile(targetPath, "{}\n", "utf8");
       await symlink(targetPath, configPath);
 
-      await store.writeConfig({ maxParallelShadows: 2, defaultShadowTimeoutSeconds: 300, headlessDrainTimeoutSeconds: 120, resultBatchWindowMs: 400, defaultThinkingLevel: "low" });
+      await store.writeConfig({ heartbeatTools: [], maxParallelShadows: 2, defaultShadowTimeoutSeconds: 300, headlessDrainTimeoutSeconds: 120, resultBatchWindowMs: 400, excludedExtensions: [], defaultThinkingLevel: "low" });
 
       expect((await lstat(configPath)).isSymbolicLink()).toBe(true);
       expect(JSON.parse(await readFile(targetPath, "utf8"))).toMatchObject({ max_parallel_shadows: 2 });

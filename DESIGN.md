@@ -10,7 +10,7 @@ Shadow Mind 是一个运行在 Pi 主 Agent 旁边的通用并行认知运行时
 
 > 由一个读取净化轨迹与各 Shadow 职责的轻量门卫统一决定"何时唤醒谁"，能否比盲抽概率更准确地让一个 Pi Session 稳定推进多条相互补充的认知与任务线。
 
-纠错、事实核查和约束检查只是典型场景；Shadow 也可以探索替代路线、维护文档或承担其他长期职责。“多核”和“章鱼”可用于解释和后续产品表达，但不是运行时的技术定义。
+纠错、事实核查和约束检查只是典型场景；Shadow 也可以探索替代路线、维护文档或承担其他长期职责。"多核"和"章鱼"可用于解释和后续产品表达，但不是运行时的技术定义。
 
 ## 2. 核心结构
 
@@ -46,6 +46,8 @@ Shadow 的 Markdown 定义持久存在，但运行实例不保留长期记忆。
 
 每个实例同时快照激活时 Main 的当前工作目录，并在整个临时 AgentSession 中保持不变。Shadow 的工具都以该目录为 `cwd`；Main 后续切换目录只影响新激活的 Shadow。
 
+临时 AgentSession 加载的扩展是 Main 的子集：去掉本插件自身，再去掉 `excluded_extensions` 列出的扩展。Shadow 需要 provider 扩展提供模型，因此不整体关闭扩展。排除项按扩展文件路径匹配，可用的标识是包名、包目录名、单文件扩展的文件名和绝对路径，都是精确匹配，不支持通配。
+
 ## 3. Shadow Mind 实体
 
 每个 Shadow Mind 使用一个 Markdown 文件描述。用户可以创建和调整它，主 Agent 也可以通过插件工具创建和调整它。
@@ -64,9 +66,9 @@ Shadow 的 Markdown 定义持久存在，但运行实例不保留长期记忆。
 
 该目录属于用户数据，不放入插件安装目录，也不随当前项目切换。插件级配置保存在 `config.json`；registry 只扫描目录顶层的 `.md` 文件，不读取 `config.json`，也不递归读取 `logs/`。
 
-`config.json` 保存默认 Shadow 模型、`gatekeeper_model`、`default_thinking_level`、`max_parallel_shadows`、`default_shadow_timeout_seconds` 和 `result_batch_window_ms` 等全局调度配置。`default_shadow_model` 省略时，插件使用激活时的当前 Main 模型；用户也可以配置一个固定默认模型。`default_thinking_level` 的内置默认值为 `low`。已废弃的 `heartbeat_probability` 与 `random_seed` 键仍被宽容接受（原样保留在 `extraFields` 中），运行时忽略，不做迁移。
+`config.json` 保存默认 Shadow 模型、`gatekeeper_model`、`default_thinking_level`、`max_parallel_shadows`、`default_shadow_timeout_seconds`、`headless_drain_timeout_seconds`、`result_batch_window_ms` 和 `excluded_extensions` 等全局调度配置。`excluded_extensions` 的内置默认值是 `["pi-experiencev2"]`，写成 `[]` 即加载 Main 的全部扩展。`default_shadow_model` 省略时，插件使用激活时的当前 Main 模型；用户也可以配置一个固定默认模型。`default_thinking_level` 的内置默认值为 `low`。已废弃的 `heartbeat_probability`、`heartbeat_tools` 与 `random_seed` 键仍被宽容接受（原样保留在 `extraFields` 中），运行时忽略，不做迁移。
 
-每次符合调度条件的 Main `turn_end` 进行门卫分派前，插件检查并重新加载发生变化的 `config.json`。纯文本轮次不会触发门卫调用。新配置只影响后续调度和新建实例；已经运行的 Shadow 继续使用启动时取得的配置快照。
+每次符合调度条件的 Main `turn_end` 进行门卫分派前，以及 final-response 调度前，插件检查并重新加载发生变化的 `config.json`。纯文本轮次不会触发门卫调用，但 Main 的最终文字可以触发 final-response 检查。新配置只影响后续调度和新建实例；已经运行的 Shadow 继续使用启动时取得的配置快照。
 
 `config.json` 使用 last-known-good 策略。解析失败或字段无效时，插件继续使用最后一次有效配置，在界面及 `/shadow status` 中持续显示错误和当前实际生效值。只有首次加载就不存在有效配置时才使用内置默认值；插件不会自动用默认内容覆盖用户的无效文件。
 
@@ -105,15 +107,18 @@ active_for_models:
 | `enabled` | 是否参与调度；默认 `true` |
 | `debug` | 是否保存完整 Shadow Session 日志；默认 `false` |
 | `activation_probability` | **废弃**：保留解析但忽略；历史上是每次 heartbeat 后的独立激活概率 |
-| `active_for_models` | 适用于哪些 Main 模型；仅当 `"*"` 是唯一元素时表示全部模型，省略时默认 `["*"]` |
+| `trigger` | 激活方式，可包含 `heartbeat`、`final_response` 或两者；默认 `[heartbeat]`。`heartbeat` 经由门卫分派（见 §5），`final_response` 在主 Agent 完成最终回复后触发完成审阅（见 §5.2） |
+| `final_response_rounds` | 主 Agent 输出结束后的最大运行轮数。设为 `1` 时仅运行一次，避免反馈循环导致持续对话；缺省或 `0` 表示不限制 |
+| `activation_tools` | **废弃**：保留解析但忽略；历史上是 heartbeat 候选工具过滤 |
+| `active_for_models` | 适用于哪些 Main 模型；`"*"` 表示全部模型，省略时默认 `["*"]`；支持 `"!pattern"` 排除语法及通配符 |
 | `run_with_model` | Shadow 自己使用的模型；省略时使用插件默认模型 |
 | `thinking_level` | Shadow 使用的 thinking level；省略时使用插件默认值，再回退到 Main 会话当前生效等级 |
 | `timeout_seconds` | Shadow 单次运行超时；省略时使用插件默认超时 |
-| `tools` | 在 Pi SDK `readOnlyTools` 之上追加的工具白名单；默认 `[]` |
+| `tools` | 在 Pi SDK `readOnlyTools` 之上追加的工具白名单；`["*"]` 授权当前 Session 的全部工具；默认 `[]` |
 
 `name` 只用于 `shadow-report` 和状态界面展示，不参与身份判断；省略时回退到最终解析出的 `id`。Markdown 正文就是 Shadow 的认知定义、长期职责和行为要求。
 
-`active_for_models` 绑定的是被观察的 Main 模型，`run_with_model` 则指定 Shadow 自己运行时使用的模型。匹配前由 Pi 将 Main 的别名或简写解析为完整 `provider/model-id`；第一版只支持该完整 ID 和精确值 `"*"`（`"*"` 仅在作为列表唯一元素时通配，与其他显式 id 混用时按字面处理，该混合列表只精确匹配其中列出的 id），不引入其他通配、正则、标签或复杂条件。模型选择优先级为：Shadow 的 `run_with_model` → 插件的 `default_shadow_model` → 激活时的当前 Main 模型。
+`active_for_models` 绑定的是被观察的 Main 模型，`run_with_model` 则指定 Shadow 自己运行时使用的模型。匹配前由 Pi 将 Main 的别名或简写解析为完整 `provider/model-id`；模型过滤使用完整 ID、纯模型短名、精确值 `"*"` 及通配符进行匹配；支持以 `!` 开头的排除规则（如 `"!gpt-6-astra"` 或 `"!openai-codex/*"`），命中任一排除项即跳过该 Shadow；当列表仅包含排除规则时，默认正向范围为全量 `*`。模型选择优先级为：Shadow 的 `run_with_model` → 插件的 `default_shadow_model` → 激活时的当前 Main 模型。
 
 如果显式配置的 `run_with_model` 当前不存在、未认证或不可用，本次激活失败并写入轻量运行事件，不自动换用其他模型。只有省略该字段时才使用插件默认 Shadow 模型。
 
@@ -129,9 +134,9 @@ Pi SDK readOnlyTools
 
 默认名称集合包含 `read`、`grep`、`find` 和 `ls`。激活时插件按名称从当前 Main Session 的最终工具 registry 解析实际实现，因此会继承其他插件对同名工具的覆盖以及当前环境适配。这里的 `readOnlyTools` 表示默认名称约定，不保证被覆盖后的实现仍然没有副作用。
 
-`tools` 是在该集合之上追加的显式白名单，省略时视为 `[]`。例如 `tools: [write]` 会获得当前 registry 中的默认四个工具、`write` 和内置 `report_to_main`。
+`tools` 是在该集合之上追加的显式白名单，省略时视为 `[]`。例如 `tools: [write]` 会获得当前 registry 中的默认四个工具、`write` 和内置 `report_to_main`。使用 `tools: ["*"]` 时，Shadow 会获得激活时 Main Session registry 中的全部工具以及 `report_to_main`；之后新增或改名的工具会自动随 registry 解析，不需要同步维护定义文件。
 
-Pi 的通用 `ToolDefinition` 没有可供插件查询的只读属性，因此自定义工具不会被自动归类或加入；编辑文件、执行 Shell 或其他能力也不会被隐式继承自 Main。配置的追加工具在当前 Session 不存在时，插件忽略该项、写入轻量运行事件，其余工具继续正常提供。
+Pi 的通用 `ToolDefinition` 没有可供插件查询的只读属性，因此自定义工具不会被自动归类或加入；编辑文件、执行 Shell 或其他能力也不会被隐式继承自 Main，除非显式列出名称或使用 `"*"`。配置的追加工具在当前 Session 不存在时，插件忽略该项、写入轻量运行事件，其余工具继续正常提供。
 
 `tools` 白名单本身就是用户对该 Shadow 的执行授权。列入白名单的写入、Shell 或其他工具可以由后台 Shadow 直接调用，插件不增加逐次确认层。
 
@@ -143,9 +148,9 @@ Pi 的通用 `ToolDefinition` 没有可供插件查询的只读属性，因此�
 
 未来可以提供自愿接入的协作式锁协议，让能够声明目标文件的工具主动参与协调；未知工具仍不能被视为受保护。该协议不属于第一版。
 
-每个 Shadow 运行实例还会固定获得内置工具 `report_to_main`。该工具用于提交一条值得 Main 注意的发现，不属于普通工具白名单，也不能被移除。它是终止型工具：一旦调用，当前 Shadow Agent loop 立即结束，运行实例随即回收，因此一次激活最多上报一条意见。Shadow 正常结束且未调用该工具时，运行结果视为“保持沉默”。
+每个 Shadow 运行实例还会固定获得内置工具 `report_to_main`。该工具用于提交一条值得 Main 注意的发现，不属于普通工具白名单，也不能被移除。它是终止型工具：一旦调用，当前 Shadow Agent loop 立即结束，运行实例随即回收，因此一次激活最多上报一条意见。Shadow 正常结束且未调用该工具时，运行结果视为"保持沉默"。
 
-“保持沉默”不代表 Shadow 没有执行工作。即使运行中成功调用过写入或其他有副作用的工具，Shadow 仍可不调用 `report_to_main` 而正常结束；插件不强制生成工作报告。此类行为只通过轻量运行事件和可选的 debug Session 日志追踪。
+"保持沉默"不代表 Shadow 没有执行工作。即使运行中成功调用过写入或其他有副作用的工具，Shadow 仍可不调用 `report_to_main` 而正常结束；插件不强制生成工作报告。此类行为只通过轻量运行事件和可选的 debug Session 日志追踪。
 
 第一版 `report_to_main` 只接受一个 `content` 参数。它不包含严重度、类别或固定的报告结构；不同 Shadow 的表达要求由各自 Markdown 正文定义。
 
@@ -200,7 +205,7 @@ AI 调用 `create_shadow` 时必须显式提供 `id`，文件保存为 `<id>.md`
 
 插件同时提供读取和修改全局配置的工具。读取 `config.json` 无需确认；AI 请求修改时必须向用户展示配置差异并取得确认，不能静默改变门卫模型、并发上限、默认模型或其他调度行为。模型覆盖字段（`default_shadow_model`、`gatekeeper_model`）接受显式 `null` 表示清除该键并回到回退链。
 
-插件不应把“事实检查者”“替代路线探索者”等类型写进主流程。新的认知视角通过新增 Markdown 实体扩展。
+插件不应把"事实检查者""替代路线探索者"等类型写进主流程。新的认知视角通过新增 Markdown 实体扩展。
 
 registry 加载时逐文件校验 frontmatter。无效 Markdown 只会使对应 Shadow 被跳过，不影响其他实体和插件启动。插件在启动时显示文件路径及具体错误，并在 `/shadow status` 中持续标记；不会自动修正或改写用户定义。
 
@@ -237,7 +242,9 @@ Main system prompt
 
 轨迹范围覆盖当前 Main Session 从开始到激活时刻的全部历史，而不只包含当前用户 epoch。这样 Shadow 能看到早期用户约束和已经形成的会话决策。epoch 只用于判断 Shadow 的迟到结果能否介入，不参与轨迹裁剪。
 
-这里的“全部历史”以 Main 激活时实际可见的上下文为准。Main 已发生 compaction 时，Shadow 继承压缩后的上下文，不绕过 compaction 读取已被替换的原始消息。
+这里的"全部历史"以 Main 激活时实际可见的上下文为准。Main 已发生 compaction 时，Shadow 继承压缩后的上下文，不绕过 compaction 读取已被替换的原始消息。
+
+ACP（Active Context Pruning，billion-context-pi）的持久压缩由独立上下文适配器处理：先解析当前分支及原生 compaction，再读取当前会话 `.acp.json` 中的有效压缩块，将可见范围内的覆盖内容替换为摘要。适配范围包含普通消息、自定义消息和单条消息中的部分工具调用，并保留 ACP 的首条用户消息保护。每次激活重新读取状态，以反映后续压缩和解压；无可用状态时沿用 Pi 原生上下文。该适配器的职责是投影持久压缩历史，Main 的其他扩展上下文变换仍由对应扩展负责。
 
 由于净化轨迹是 Main 上下文的严格子集，轨迹本身不增加摘要或截断机制，完整继承 Main 可见上下文；唯一的例外是历史 `shadow-report` 反馈链按 §6 有界保留。如果某个 Shadow 配置的 `run_with_model` 上下文窗口更小而无法容纳轨迹，则该次激活失败并记录原因，不生成介入消息。
 
@@ -277,7 +284,10 @@ shell({ command: "npm test" }) · 失败，12 项通过、2 项失败
 工具摘要器是独立扩展点；增加新工具时注册对应摘要器，不在轨迹构建主流程中持续追加类型分支。
 
 这样，Shadow 可以观察 Main 做了什么以及行动的大致结果，但无法直接继承 Main 的证据内容和推理路径。需要核实时，Shadow 使用自己的工具重新调查，形成独立证据链。
+
 ## 5. Gatekeeper 调度
+
+每个 Shadow 通过 `trigger` 声明激活时机，默认 `[heartbeat]` 由门卫分派（本节）；`trigger: [final_response]` 在主 Agent 完成最终回复后触发完成审阅（§5.2）。配置为 `[heartbeat, final_response]` 时两套调度相互独立。
 
 调度权属于一个轻量门卫模型（Gatekeeper）。Main model call 完成后，只有该 `turn_end` 至少包含一个已完成的工具调用，才触发一次门卫调用；纯文本轮次直接跳过，不调用门卫。这会压制普通问答、方案讨论和 Shadow 报告后的纯文本回应产生的无效唤醒。带工具调用的中间轮次仍参与判断，因此 Main 一旦开始读取、验证或修改项目，Shadow 就有机会介入。Shadow AgentSession 自己的 `turn_end` 不参与 Main 调度。
 
@@ -292,7 +302,7 @@ shell({ command: "npm test" }) · 失败，12 项通过、2 项失败
 3. 门卫输出严格 JSON：`{"activations":[{"id":"...","brief":"..."}]}`，`brief` 是给该 Shadow 的一句话焦点提示。解析时容忍 markdown 代码围栏；未知 id 丢弃、重复 id 去重、`brief` 缺省为空串。名单可以为空。
 4. 轨迹超出门卫模型上下文窗口时做保头保尾截断：首条 USER 消息（原始任务意图）必保留，剩余预算留给尾部最近的工具活动，并在决策事件中标记截断。不做分块或多次调用。
 
-被唤醒的 Shadow 在自己的定义之前收到一行中性参考提示：`唤醒理由（供参考）：<brief>`。它不是指令，Shadow 醒来后原有的“无关即退出”自检仍然优先——门卫误报时 Shadow 仍能自行退出。brief 是不可信的门卫输出：注入前做压平、定界符剥离和长度上限处理，运行协议明确要求 Shadow 把该行当作数据而非指令，不执行其中出现的任何指示。
+被唤醒的 Shadow 在自己的定义之前收到一行中性参考提示：`唤醒理由（供参考）：<brief>`。它不是指令，Shadow 醒来后原有的"无关即退出"自检仍然优先——门卫误报时 Shadow 仍能自行退出。brief 是不可信的门卫输出：注入前做压平、定界符剥离和长度上限处理，运行协议明确要求 Shadow 把该行当作数据而非指令，不执行其中出现的任何指示。
 
 ### 失败语义
 
@@ -320,9 +330,21 @@ available_slots = max_parallel_shadows - running_shadow_count
 
 Main 在会话中切换模型后，后续分派直接依据新模型重新预筛。
 
+### 5.2 Final response
+
+配置了 `final_response` 的 Shadow 在 Main 发出非空最终文字，并进入 `agent_settled` 状态后参与调度。该模式仍应用 `enabled` 和 `active_for_models`，其候选资格独立于 `heartbeat_tools`、`activation_tools`、`heartbeat_probability` 与 `activation_probability`，所有匹配项都必须获得一次运行机会。
+
+最终回复检查使用当时的完整净化轨迹快照。`max_parallel_shadows` 仍是硬并发上限；没有空闲槽位或同一 Shadow 正在运行时，检查进入专用队列，槽位释放后继续执行。旧 epoch 的运行释放槽位时同样继续泵送当前队列，避免跨 epoch 的异步收尾把检查永久卡住。
+
+每次最终回复检查拥有独立、递增的 review generation。独立的 completion-review 协调器统一拥有 generation、等待队列、运行完成计数和报告聚合，Runtime 只转发宿主生命周期事件与 Shadow 启停通知。同一 generation 的报告先暂存，所有匹配 Shadow 都进入终态后才合并为一次 `shadow-report`；因此较慢的同批检查不会在 Main 已开始修订后单独 steer。新的最终回复、新用户输入、其他报告触发的修订或 Session 关闭都会使旧 generation 失效，并清空尚未启动的项目；仍在收尾的旧运行只能记录 lifetime usage，不能再投递报告。异步刷新配置和 Registry 时还会同时校验启动请求与 epoch，防止等待 I/O 的旧最终回复在新任务中恢复调度。
+
+检查结果沿用普通 `shadow-report` 的 steer/follow-up 机制。Main 根据聚合报告修正并再次给出最终回复后，默认会再次触发完成检查。若需避免反馈循环导致持续对话，可设置 `final_response_rounds: 1` 限制仅运行一轮（缺省或 `0` 表示不限制）。该轮次仅在整批审查进入终态且未被失效打断时提交；无报告以及超时或错误的运行同样计为一次尝试，被中途失效打断的审查不消耗轮次。轮次预算由独立的 FinalResponseBudget 持有，Runtime 只提交整批完成结果，并在新用户输入与 Session 开始时重置。
+
+若在触发最终回复检查时，缓冲队列中已有待交付的过程巡检报告（如门卫分派产出的报告），系统会优先刷新交付已有报告以驱动 Main 修复已知问题，暂不启动针对旧文本的最终检查。这避免了终检门禁在尚未修复过程缺陷的半成品上被提前唤醒并白白消耗唯一的验收轮次。Shadow 没有发现时保持沉默，循环自然结束。
+
 ## 6. Shadow 的输出与介入
 
-Shadow 可以得出“没有值得介入的发现”，此时保持沉默。插件不要求每次激活都产生消息。
+Shadow 可以得出"没有值得介入的发现"，此时保持沉默。插件不要求每次激活都产生消息。
 
 当 Shadow 发现问题或完成并行工作后，可以调用 `report_to_main` 提交一条面向 Main 的简洁结果。Shadow 不决定投递方式，插件根据 Main 当前状态选择交付方式：
 
@@ -338,7 +360,7 @@ Shadow 返回
     └── 丢弃旧结果
 ```
 
-最终回复不会立即终止正在运行的 Shadow。迟到结果仍可在下一条用户消息到来前触发补充回复。
+门卫分派唤醒的 Shadow 不会因为 Main 给出最终回复而立即终止，迟到结果仍可在下一条用户消息到来前触发补充回复。Final-response Shadow 则按 review generation 聚合，只有整批检查结束后才允许触发一次补充回复。
 
 每个用户任务拥有递增的 `epoch`：
 
@@ -396,6 +418,7 @@ max_parallel_shadows
 result_batch_window_ms
 default_shadow_timeout_seconds
 running Shadow IDs
+queued final-response checks
 active Shadow runs and their start epoch
 lightweight Shadow run events in Main Session custom entries
 ```
@@ -406,7 +429,9 @@ Shadow 的临时 AgentSession 不跨激活复用，也不写回记忆。
 
 轻量事件属于运行观测数据，不参与任何 Agent 的上下文。`debug: true` 产生的完整 Session 日志也只用于调试，不会成为后续 Shadow 的记忆。
 
-插件提供 `Alt+S` 快捷键以及 `/shadow toggle`、`/shadow pause`、`/shadow resume` 命令，只控制当前 Main Session 是否继续进行门卫分派，不修改全局 Shadow Markdown。执行 pause 时立即中止当前 Session 已运行的 Shadow 与在途门卫调用、清空尚未发送的聚合结果并释放并发槽位；resume 后从后续 Main `turn_end` 恢复分派。暂停时底部状态固定显示 `🐙 Paused`，不展示恒为零的运行数量。
+插件提供 `Alt+S` 快捷键以及 `/shadow toggle`、`/shadow pause`、`/shadow resume` 命令，只控制当前 Main Session 是否继续进行门卫分派与 final-response 检查，不修改全局 Shadow Markdown。执行 pause 时立即中止当前 Session 已运行的 Shadow 与在途门卫调用、清空排队检查和尚未发送的聚合结果并释放并发槽位；resume 后从后续 Main `turn_end` 恢复分派。暂停时底部状态固定显示 `🐙 Paused`，不展示恒为零的运行数量。
+
+报告查看由独立的 ReportBrowser 拥有命令、查看器生命周期与最近交付历史，Runtime 只转发交付结果、命令和会话重置。历史按交付顺序保留最近 5 份报告及其交付时间，与最近运行列表独立。TUI 中 `/shadow reports` 直接打开完整正文快照，查看器按终端尺寸限高并支持逐行、翻页及首尾滚动；Escape 或 `/shadow reports hide` 关闭。状态面板继续展示紧凑运行摘要。报告查看只使用当前 Session 的内存历史，切换会话或 reload 时关闭查看器并清空历史；持久化报告由原有会话记录承载。
 
 同一个 Shadow 在前一次实例仍运行时不重复激活；不同 Shadow 可以并行运行。
 
@@ -423,20 +448,23 @@ Shadow 的临时 AgentSession 不跨激活复用，也不写回记忆。
 - 每次激活创建并在结束后销毁全新的临时 AgentSession；
 - 用户和 AI 创建、修改、启用与停用 Shadow；
 - AI 写入全局 Shadow registry 前取得用户确认；
-- 按 Main 模型筛选 Shadow；
+- 按 Main 模型筛选 Shadow，支持 `"!pattern"` 排除语法、纯模型短名与通配符；
 - 为每个 Shadow 配置执行模型，并支持插件级默认模型；
 - 纯文本 Main 轮次跳过分派，只在完成工具调用的轮次触发门卫；
 - 每个符合条件的 `turn_end` 调用一次轻量门卫模型，由它决定唤醒名单与各自的焦点提示；
 - 门卫失败时 fail-closed 跳过本轮，不回退随机调度；
 - 通过 `gatekeeper_model` 配置门卫模型，支持 `gatekeeper_model` → `default_shadow_model` → Main 当前模型的回退链；
 - 通过 `max_parallel_shadows` 配置最大并行数量；
+- 支持 `trigger: [final_response]` 完成审阅，整批检查聚合后一次性投递，并通过 `final_response_rounds` 限制轮数；
+- 通过 ACP 适配器投影持久压缩历史；
+- 通过 `excluded_extensions` 排除会话记录类扩展；
 - 构造净化轨迹；
 - 默认使用当前 Main Session 的全部净化历史；
 - 通过工具摘要器注册表生成结果概述，并提供通用兜底；
 - Shadow 独立使用工具进行检查；
 - 通过内置 `report_to_main` 工具显式提交介入内容；
 - `report_to_main` 调用后立即终止对应 Shadow Agent loop；
-- 为每个 Shadow 配置工具白名单，默认使用 Pi 的 `readOnlyTools`；白名单中的额外工具视为已授权；
+- 为每个 Shadow 配置工具白名单，默认使用 Pi 的 `readOnlyTools`；`["*"]` 授权当前 Session 的全部工具；白名单中的额外工具视为已授权；
 - 提供插件级默认运行超时，并允许单个 Shadow 覆盖；
 - 记录轻量运行事件并提供 `/shadow status`；
 - 为 `debug: true` 的 Shadow 保存完整临时 Session 日志；
@@ -448,6 +476,7 @@ Shadow 的临时 AgentSession 不跨激活复用，也不写回记忆。
 - 使用 epoch 丢弃跨用户任务的迟到结果。
 - 新 epoch 开始时立即中止旧 epoch 的 Shadow 并释放资源；
 - 用户手动中止 Main 时同步停止当前 epoch 的 Shadow；
+- TUI 中 `/shadow reports` 查看最近交付报告；
 - 支持按 Main Session 暂停和恢复整个 Shadow 系统；
 
 第一版明确不包含：

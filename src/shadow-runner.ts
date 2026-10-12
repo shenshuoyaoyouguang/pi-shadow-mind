@@ -1,6 +1,5 @@
 import { mkdir } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
-import { basename, dirname, join, normalize, resolve } from "node:path";
+import { join } from "node:path";
 import { Type } from "typebox";
 import {
   DefaultResourceLoader,
@@ -20,6 +19,7 @@ import { addUsage, zeroUsage, type ShadowUsage } from "./usage.js";
  * tool registry, per the design contract:
  *
  * - the final set is `readOnlyTools defaults + whitelist + report_to_main`;
+ * - `*` in the whitelist means all tools currently present in the main session;
  * - names that do not exist in the main session are dropped (ignored) and
  *   returned as `missing`, while the rest are provided normally;
  * - the built-in `report_to_main` is always kept.
@@ -30,7 +30,9 @@ export function resolveShadowTools(
   defaults: readonly string[] = DEFAULT_READ_TOOLS,
 ): { tools: string[]; missing: string[] } {
   const builtin = new Set(["report_to_main"]);
-  const requested = [...new Set([...defaults, ...whitelist, ...builtin])];
+  const requested = whitelist.includes("*")
+    ? [...new Set([...available, ...builtin])]
+    : [...new Set([...defaults, ...whitelist, ...builtin])];
   const tools: string[] = [];
   const missing: string[] = [];
   for (const name of requested) {
@@ -41,8 +43,7 @@ export function resolveShadowTools(
 
 import { buildShadowRequest } from "./protocol.js";
 import { serializeTrajectory } from "./trajectory.js";
-
-const SELF_PATH = normalize(resolve(fileURLToPath(import.meta.url)));
+import { createExtensionExcluder, isSelfExtension } from "./extension-filter.js";
 
 export interface ShadowRunRequest {
   shadow: ShadowDefinition;
@@ -122,13 +123,13 @@ export function buildRunResult(options: {
   const usage = usageMetrics(ownMessages);
   return {
     reason,
-    ...(error !== undefined ? { error } : {}),
+    ...(error === undefined ? {} : { error }),
     durationMs,
     toolNames: session?.getActiveToolNames() ?? [],
     missingTools,
     ...metrics,
     usage,
-    ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
+    ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
     sessionFile: session?.sessionFile,
   };
 }
@@ -196,6 +197,7 @@ export class ShadowRunner {
   ): Promise<{ session: ShadowSession; missingTools: string[]; thinkingLevel: string }> {
     const thinkingLevel = resolveRunThinkingLevel(model, request);
     const settingsManager = SettingsManager.create(request.cwd, request.agentDir);
+    const isExcluded = createExtensionExcluder(request.config.excludedExtensions);
     const resourceLoader = new DefaultResourceLoader({
       cwd: request.cwd,
       agentDir: request.agentDir,
@@ -207,11 +209,18 @@ export class ShadowRunner {
       appendSystemPrompt: [],
       agentsFilesOverride: () => ({ agentsFiles: [] }),
       skillsOverride: (base) => ({ skills: [], diagnostics: base.diagnostics }),
+      // Drop this plugin itself plus every extension the user excluded, so
+      // session-scoped extensions (archivers, recorders) never treat an internal
+      // Shadow run as one more user session.
       extensionsOverride: (base) => ({
         ...base,
-        extensions: base.extensions.filter((extension) => !isSelfExtension(extension.resolvedPath)),
+        extensions: base.extensions.filter(
+          (extension) =>
+            !isSelfExtension(extension.resolvedPath) && !isExcluded(extension.resolvedPath),
+        ),
       }),
     });
+    await resourceLoader.reload();
     const reportTool = createReportTool((content) => {
       if (!content.trim()) return false;
       if (state.reported || controller.signal.aborted) return false;
@@ -399,11 +408,4 @@ function assertTrajectoryFits(model: Model<any>, systemPrompt: string, requestTe
   if (estimated > model.contextWindow) {
     throw new Error(`trajectory ~${estimated} tokens exceeds ${model.provider}/${model.id} context window (${model.contextWindow})`);
   }
-}
-
-function isSelfExtension(candidate: string): boolean {
-  const normalized = normalize(resolve(candidate));
-  if (normalized === SELF_PATH) return true;
-  const sourceDirectory = normalize(resolve(dirname(SELF_PATH)));
-  return dirname(normalized) === sourceDirectory && (basename(normalized) === "index.ts" || basename(normalized) === "index.js");
 }

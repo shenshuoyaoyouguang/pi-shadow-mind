@@ -2,6 +2,18 @@
   "name": "pi-shadow-mind",
   "version": "0.2.0",
   "description": "Parallel cognitive runtime for Pi",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/liu-zhengdong/pi-shadow-mind.git"
+  },
+  "homepage": "https://github.com/liu-zhengdong/pi-shadow-mind#readme",
+  "bugs": {
+    "url": "https://github.com/liu-zhengdong/pi-shadow-mind/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "type": "module",
   "keywords": [
     "pi-package",
@@ -21,6 +33,7 @@
   "files": [
     "dist",
     "README.md",
+    "README.zh-CN.md",
     "DESIGN.md"
   ],
   "pi": {
