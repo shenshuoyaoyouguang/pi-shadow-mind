@@ -25,7 +25,8 @@ jobs:
         with:
           workspaces: rust/pi-shadow-kernel
 
-      - uses: jetli/wasm-pack-action@v0.10.0
+      - name: install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
       - name: npm ci
         run: npm ci
