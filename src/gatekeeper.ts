@@ -163,6 +163,34 @@ function extractJson(text: string): unknown {
   throw new Error("no JSON object in gatekeeper reply");
 }
 
+/** Minimal shape of pi-coding-agent's ModelRegistry auth hydration used here. */
+export interface AuthHydratingRegistry {
+  getApiKeyAndHeaders(model: Model<any>): Promise<{
+    ok: boolean;
+    error?: string;
+    apiKey?: string;
+    headers?: Record<string, string | null>;
+  }>;
+}
+
+/**
+ * pi-ai's completeSimple has no credential fallback: getClientApiKey only
+ * accepts an explicit apiKey or an authorization header. Catalog models from
+ * modelRegistry.find() carry neither, so the gatekeeper must hydrate auth
+ * through the registry first — otherwise every explicitly configured
+ * gatekeeper/shadow model fails with "No API key for provider".
+ */
+export function createAuthHydratedComplete(
+  registry: AuthHydratingRegistry,
+  complete: typeof completeSimple = completeSimple,
+): typeof completeSimple {
+  return async (model, context, options) => {
+    const auth = await registry.getApiKeyAndHeaders(model);
+    if (!auth.ok) throw new Error(auth.error ?? `no auth for ${model.provider}/${model.id}`);
+    return complete(model, context, { ...options, apiKey: auth.apiKey, headers: auth.headers });
+  };
+}
+
 export async function runGatekeeper(options: RunGatekeeperOptions): Promise<GatekeeperOutcome> {
   const fail = (error: string): GatekeeperOutcome => ({ ok: false, activations: [], error });
   const deps: GatekeeperDeps = {

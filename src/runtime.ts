@@ -14,7 +14,7 @@ import {
 import { ConfigStore } from "./config.js";
 import { EntityStore } from "./entity-store.js";
 import { FinalResponseBudget } from "./final-response-budget.js";
-import { runGatekeeper, type GatekeeperOutcome } from "./gatekeeper.js";
+import { createAuthHydratedComplete, runGatekeeper, type GatekeeperOutcome } from "./gatekeeper.js";
 import { registerManagementTools } from "./management-tools.js";
 import { ShadowRegistry } from "./registry.js";
 import { ReportBatcher, formatReportBatch } from "./report-batcher.js";
@@ -368,6 +368,7 @@ export class ShadowMindRuntime {
         mainThinkingLevel: ctx.thinkingLevel,
         signal: controller.signal,
         deps: {
+          complete: createAuthHydratedComplete(ctx.modelRegistry),
           resolveModel: (id) => resolveModel(ctx, id),
           modelAuthOk: (model) => ctx.modelRegistry.hasConfiguredAuth(model) || ctx.modelRegistry.isUsingOAuth(model),
         },
@@ -767,12 +768,9 @@ export class ShadowMindRuntime {
         ),
       ...diagnostics.map((diagnostic) => `diagnostic: ${diagnostic}`),
       ...this.recentEvents.slice(-5).map((event) => {
-        const failed =
-          event.kind === "run-end" &&
-          (event.data?.reason === "error" || event.data?.reason === "timeout");
-        const detail = failed
-          ? ` ${event.data?.error ?? event.data?.reason}`
-          : "";
+        const failed = (event.kind === "run-end" && (event.data?.reason === "error" || event.data?.reason === "timeout"))
+          || (event.kind === "gatekeeper-error" && typeof event.data?.error === "string");
+        const detail = failed ? ` ${event.data?.error ?? event.data?.reason}` : "";
         return `${new Date(event.at).toLocaleTimeString("en-GB", { hour12: false })} ${event.kind}${detail}`;
       }),
       "Shortcut: Alt+S toggle · Commands: /shadow toggle | pause | resume | status | hide | reports",

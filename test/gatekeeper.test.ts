@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Model } from "@earendil-works/pi-ai";
 import {
   buildGatekeeperPrompt,
+  createAuthHydratedComplete,
   fitTrajectory,
   GATEKEEPER_BRIEF_CHARS,
   parseGatekeeperReply,
@@ -180,5 +181,29 @@ describe("runGatekeeper", () => {
       deps: deps('{"activations":[]}'),
     });
     expect(outcome.truncated).toBe(true);
+  });
+});
+
+describe("createAuthHydratedComplete", () => {
+  it("forwards hydrated apiKey and headers while preserving call options", async () => {
+    const calls: unknown[] = [];
+    const registry = {
+      getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "sk-test", headers: { "x-a": "1" } }),
+    };
+    const complete = createAuthHydratedComplete(registry as never, (async (_model: unknown, _context: unknown, options: unknown) => {
+      calls.push(options);
+      return { role: "assistant", stopReason: "stop", content: [] };
+    }) as never);
+    const signal = new AbortController().signal;
+    await complete(fakeModel, { messages: [] } as never, { signal, reasoning: "low" });
+    expect(calls[0]).toMatchObject({ signal, reasoning: "low", apiKey: "sk-test", headers: { "x-a": "1" } });
+  });
+
+  it("throws the registry error when auth cannot be resolved", async () => {
+    const registry = { getApiKeyAndHeaders: async () => ({ ok: false, error: "No API key for provider: openai" }) };
+    const complete = createAuthHydratedComplete(registry as never, (async () => {
+      throw new Error("complete must not be called");
+    }) as never);
+    await expect(complete(fakeModel, { messages: [] } as never, undefined)).rejects.toThrow("No API key for provider: openai");
   });
 });

@@ -29,8 +29,17 @@
   - `npx vitest run test/registry.test.ts`：跑单个测试文件
   - `npm run build`：清理后 tsc 生成声明，esbuild 打包到 `dist/index.js`
   - 开发运行：`pi -e ./src/index.ts`
-- 测试用 vitest globals，`test/*.test.ts` 与 src 模块一一对应，纯单元测试，无外部服务依赖。
-- README.md 是英/中双语，行为变化需同步更新两节；DESIGN.md 是行为契约文档。
+- 测试用 vitest globals，`test/*.test.ts` 与 src 模块一一对应，纯单元测试，无外部服务依赖。vitest fake timers 下裸 `await setTimeout(0)` 会挂死测试；涉及定时的交错场景用真实定时器 + 短窗口。
+- README.md 是英/中双语，行为变化需同步更新两节；DESIGN.md 是行为契约文档。`docs/superpowers/` 存放规格（specs）与实施计划（plans），`docs/reviews/` 是历史评审记录。`BENCHMARK.md` 是 Terminal-Bench 2.1 评测协议。
+
+# Module map（src/ 按职责划分）
+
+- `runtime.ts`：唯一编排层，接 Pi 事件、注册工具/命令/快捷键并持有各 Store；业务决策一律下沉到下列模块。
+- 决策：`gatekeeper.ts`（LLM 调度判定）、`scheduler.ts`（确定性预筛选，纯函数）。
+- 执行：`shadow-runner.ts`（影子运行）、`protocol.ts`（请求构造与类型）、`report-batcher.ts`、`summaries.ts`、`trajectory.ts`。
+- 持久化：`registry.ts`、`entity-store.ts`、`usage-store.ts` + `usage-file-lock.ts` + `atomic-file.ts`、`config.ts`。
+- 交互与收尾：`management-tools.ts`（8 个管理工具）、`session-lifetime.ts` + `shutdown-drain.ts`、`validation.ts`（输入校验）。
+- 共享类型：`types.ts`（ShadowConfig/ShadowDefinition/ShadowReport 等领域类型）、`usage.ts`（用量统计类型与格式化的纯函数）。
 
 ## Build invariants（scripts/build.mjs 强制校验）
 
