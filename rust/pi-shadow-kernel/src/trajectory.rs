@@ -111,7 +111,7 @@ pub fn serialize_trajectory(messages: &[Value]) -> String {
                 let has_id = obj
                     .get("toolCallId")
                     .and_then(|v| v.as_str())
-                    .map_or(false, |id| results.contains_key(id));
+                    .is_some_and(|id| results.contains_key(id));
                 if !has_id {
                     lines.push(format!("TOOL RESULT: {}", summarize_tool_result(msg)));
                 }

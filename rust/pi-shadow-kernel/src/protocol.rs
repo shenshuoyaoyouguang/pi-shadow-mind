@@ -35,7 +35,7 @@ const KICKOFF: &str = "First decide whether the trajectory is relevant to this S
 
 pub fn build_shadow_request(trajectory: &str, shadow: &ShadowDefinition, brief: Option<&str>) -> String {
     let sanitized = brief
-        .map(|b| sanitize_brief(b))
+        .map(sanitize_brief)
         .filter(|s| !s.is_empty());
     let brief_line = match sanitized {
         Some(s) => format!("唤醒理由（供参考）：{}\n", s),

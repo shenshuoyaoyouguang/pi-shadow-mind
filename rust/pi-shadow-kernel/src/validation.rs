@@ -12,11 +12,11 @@ pub const THINKING_LEVELS: &[&str] = &["off", "minimal", "low", "medium", "high"
 
 pub fn is_finite_number(value: &Value) -> bool {
     // JSON cannot represent NaN/Infinity, so any JSON number is finite.
-    value.as_f64().map_or(false, |n| n.is_finite())
+    value.as_f64().is_some_and(|n| n.is_finite())
 }
 
 pub fn is_non_empty_string(value: &Value) -> bool {
-    value.as_str().map_or(false, |s| !s.trim().is_empty())
+    value.as_str().is_some_and(|s| !s.trim().is_empty())
 }
 
 pub fn is_string_array(value: &Value) -> bool {
@@ -58,7 +58,7 @@ pub fn clean_string_array(
 }
 
 pub fn is_thinking_level(value: &Value) -> bool {
-    value.as_str().map_or(false, |s| THINKING_LEVELS.contains(&s))
+    value.as_str().is_some_and(|s| THINKING_LEVELS.contains(&s))
 }
 
 pub fn parse_thinking_level(value: &Value) -> Option<ThinkingLevel> {

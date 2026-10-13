@@ -56,7 +56,7 @@ fn generic_array_counts_block_types() {
 
 #[test]
 fn preview_is_capped_at_200_code_points() {
-    let long: String = std::iter::repeat('x').take(300).collect();
+    let long: String = "x".repeat(300);
     let r = json!({"toolName": "read", "content": [{"type": "text", "text": long}]});
     let out = summarize_tool_result(&r);
     // "1 read · " + 200 x's + "…"

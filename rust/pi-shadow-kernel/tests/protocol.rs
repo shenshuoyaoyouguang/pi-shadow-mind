@@ -69,7 +69,7 @@ fn flattens_whitespace_in_brief() {
 #[test]
 fn caps_brief_at_400_code_points() {
     let s = shadow("s", "p");
-    let long: String = std::iter::repeat('x').take(600).collect();
+    let long: String = "x".repeat(600);
     let out = build_shadow_request("TRAJ", &s, Some(&long));
     // The brief line contains exactly 400 x's (capped by code points).
     let brief_line = out

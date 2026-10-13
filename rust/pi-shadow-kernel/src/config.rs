@@ -156,7 +156,7 @@ pub fn serialize_config(config: &ShadowConfig) -> String {
     }
     root.insert(
         "default_thinking_level".to_string(),
-        serde_json::to_value(&config.default_thinking_level).unwrap(),
+        serde_json::json!(config.default_thinking_level),
     );
     if let Some(extra) = &config.extra_fields {
         for (k, v) in extra.iter() {

@@ -15,7 +15,7 @@ use serde_json::{json, Value};
 #[test]
 fn is_finite_number_accepts_numbers() {
     assert!(is_finite_number(&json!(42)));
-    assert!(is_finite_number(&json!(3.14)));
+    assert!(is_finite_number(&json!(2.5)));
     assert!(is_finite_number(&json!(0)));
     assert!(is_finite_number(&json!(-5)));
 }

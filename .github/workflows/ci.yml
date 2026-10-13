@@ -36,7 +36,7 @@ jobs:
         working-directory: rust/pi-shadow-kernel
 
       - name: cargo clippy
-        run: cargo clippy --all-targets
+        run: cargo clippy --all-targets -- -D warnings
         working-directory: rust/pi-shadow-kernel
 
       - name: build wasm kernel
