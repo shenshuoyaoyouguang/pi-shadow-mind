@@ -73,7 +73,7 @@ pub struct ShadowDefinition {
     pub extra_fields: Option<Map<String, Value>>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ShadowUsageCost {
     pub input: f64,
@@ -83,7 +83,7 @@ pub struct ShadowUsageCost {
     pub total: f64,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ShadowUsage {
     pub requests: u64,

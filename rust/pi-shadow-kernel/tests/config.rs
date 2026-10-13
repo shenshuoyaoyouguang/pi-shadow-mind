@@ -62,7 +62,7 @@ fn round_trip_is_stable() {
 fn extra_fields_preserved_round_trip() {
     let raw = r#"{"max_parallel_shadows":2,"custom_note":"hi","nested":{"a":1}}"#;
     let cfg = parse_config(raw).expect("parse");
-    let extra = cfg.extra_fields.expect("extra fields present");
+    let extra = cfg.extra_fields.as_ref().expect("extra fields present");
     assert_eq!(extra.get("custom_note").and_then(|v| v.as_str()), Some("hi"));
     let out = serialize_config(&cfg);
     assert!(out.contains("\"custom_note\": \"hi\""));
