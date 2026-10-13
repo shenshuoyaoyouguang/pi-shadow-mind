@@ -42,7 +42,7 @@ pub fn build_shadow_request(trajectory: &str, shadow: &ShadowDefinition, brief: 
         None => String::new(),
     };
     format!(
-        "{}\n\n{}\n\n<shadow-mind id=\"{}\" name=\"{}\">\n{}{}</shadow-mind>\n\n{}",
+        "{}\n\n{}\n\n<shadow-mind id=\"{}\" name=\"{}\">\n{}{}\n</shadow-mind>\n\n{}",
         trajectory, RUNTIME_PROTOCOL, shadow.id, shadow.name, brief_line, shadow.prompt, KICKOFF
     )
 }

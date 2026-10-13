@@ -206,8 +206,8 @@ export function cleanStringArray(
   name: string,
 ): string[] {
   if (!wasmReady) return tsValidation.cleanStringArray(value, fallback as string[], name);
-  // undefined → omit the field (Rust treats absent as fallback);
-  // null → include null (Rust errors, matching TS throwing on null).
+  // Match TS throwing on null; undefined → omit (Rust treats absent as fallback).
+  if (value === null) throw new Error(`${name} must be an array of non-empty strings`);
   const input = value === undefined ? { fallback, name } : { value, fallback, name };
   return JSON.parse(validationCleanStringArray(JSON.stringify(input))) as string[];
 }
