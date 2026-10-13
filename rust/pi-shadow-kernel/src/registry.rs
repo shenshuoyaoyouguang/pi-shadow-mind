@@ -125,7 +125,7 @@ fn optional_string(value: Option<&Value>, name: &str) -> Result<Option<String>, 
 fn boolean_value(value: Option<&Value>, fallback: bool, name: &str) -> Result<bool, String> {
     match value {
         None => Ok(fallback),
-        Some(Value::Bool(b)) => Ok(b),
+        Some(Value::Bool(b)) => Ok(*b),
         _ => Err(format!("{} must be boolean", name)),
     }
 }
