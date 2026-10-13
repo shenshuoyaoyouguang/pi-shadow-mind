@@ -90,7 +90,7 @@ export function shouldEvaluateHeartbeat(
   const toolNames =
     toolsOrResults instanceof Set
       ? Array.from(toolsOrResults as ReadonlySet<string>)
-      : extractToolNames(toolsOrResults as readonly unknown[]);
+      : Array.from(extractToolNames(toolsOrResults as readonly unknown[]));
   return schedulerShouldEvaluateHeartbeat(
     JSON.stringify({ toolNames, heartbeatTools: heartbeatTools ?? [] }),
   );
