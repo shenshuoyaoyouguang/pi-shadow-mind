@@ -26,6 +26,39 @@ function run(cmd, opts) {
   execSync(cmd, { stdio: "inherit", ...opts });
 }
 
+// 0. Probe the Rust toolchain. When absent, skip silently so `npm run build`
+//    stays green on machines without Rust — the TS fallback in wasm-kernel.ts
+//    covers the gap. A real build error (toolchain present but wasm-pack fails)
+//    still exits non-zero below.
+function hasCommand(cmd) {
+  try {
+    execSync(cmd, { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function hasWasmTarget() {
+  try {
+    const out = execSync("rustup target list --installed", { encoding: "utf8" });
+    return out.includes("wasm32-unknown-unknown");
+  } catch {
+    return false;
+  }
+}
+
+if (!hasCommand("wasm-pack --version")) {
+  console.warn("[build-wasm] wasm-pack not found; skipping (TypeScript fallback stays active).");
+  process.exit(0);
+}
+if (!hasWasmTarget()) {
+  console.warn(
+    "[build-wasm] wasm32-unknown-unknown target not installed; skipping. Install with: rustup target add wasm32-unknown-unknown",
+  );
+  process.exit(0);
+}
+
 // 1. Build the crate to a `--target web` JS glue + .wasm.
 console.log("[build-wasm] wasm-pack build --target web");
 await rm(outDir, { recursive: true, force: true });

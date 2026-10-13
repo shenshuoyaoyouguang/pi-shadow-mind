@@ -1,6 +1,6 @@
 import { summarizeToolResult } from "./summaries.js";
 
-type MessageLike = { role?: string; content?: unknown; [key: string]: unknown };
+export type MessageLike = { role?: string; content?: unknown; [key: string]: unknown };
 
 /**
  * Delivered shadow reports stay in the session forever and are replayed into

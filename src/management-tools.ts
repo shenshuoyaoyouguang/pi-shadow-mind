@@ -2,7 +2,7 @@ import { Type } from "typebox";
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { THINKING_LEVELS } from "./validation.js";
 import type { ShadowConfig, ShadowTrigger } from "./types.js";
-import { parseConfig } from "./config.js";
+import { parseConfig } from "./wasm-kernel.js";
 import { describeShadow, type EntityStore } from "./entity-store.js";
 
 const ID = Type.String({ pattern: "^[a-z0-9][a-z0-9_-]*$" });

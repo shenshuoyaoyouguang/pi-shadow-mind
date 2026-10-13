@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { acquireUsageFileLock } from "./usage-file-lock.js";
-import { addUsage, zeroUsage, type ShadowUsage } from "./usage.js";
+import { addUsage, zeroUsage } from "./wasm-kernel.js";
+import type { ShadowUsage } from "./usage.js";
 import { isFiniteNumber } from "./validation.js";
 
 interface UsageDocument {

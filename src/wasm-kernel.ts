@@ -4,19 +4,21 @@
  * `config`/`registry`/`gatekeeper`). Each wrapper (de)serializes JSON at the
  * seam; the raw wasm-bindgen functions live in `./generated/kernel-glue.js`.
  *
- * This module is additive and is NOT imported by the existing runtime yet —
- * progressive migration swaps individual `import { fn } from "./scheduler.js"`
- * sites over to `from "./wasm-kernel.js"` one module at a time. Until then it
- * stays inert (and out of the esbuild bundle, so build invariants hold).
+ * Safety net: when the WASM kernel is not built (`KERNEL_WASM_READY = false`)
+ * or fails to initialize, every wrapper transparently falls back to the
+ * existing TypeScript implementation, so callers keep working without a Rust
+ * toolchain. Progressive migration swaps individual `import { fn } from
+ * "./scheduler.js"` sites over to `from "./wasm-kernel.js"` one module at a
+ * time.
  *
- * The kernel is initialized once via top-level await on first import. When
- * `KERNEL_WASM_READY` is false (pre-build placeholder) initialization is
- * skipped and any wrapper call throws loudly via the stub glue.
+ * The kernel is initialized once via top-level await on first import.
  */
 
 import type { ShadowActivationDecision, ShadowConfig, ShadowDefinition } from "./types.js";
 import type { ShadowUsage } from "./usage.js";
 import type { GatekeeperActivation } from "./gatekeeper.js";
+import type { ToolResultLike } from "./summaries.js";
+import type { MessageLike } from "./trajectory.js";
 import {
   init,
   schedulerExtractToolNames,
@@ -47,14 +49,36 @@ import {
 } from "./generated/kernel-glue.js";
 import { KERNEL_WASM_BASE64, KERNEL_WASM_READY } from "./generated/kernel-wasm.js";
 
+// TypeScript fallbacks — the existing pure modules, kept as a safety net so
+// callers keep working when the WASM kernel is absent or fails to init.
+import * as tsScheduler from "./scheduler.js";
+import * as tsUsage from "./usage.js";
+import * as tsValidation from "./validation.js";
+import * as tsSummaries from "./summaries.js";
+import * as tsTrajectory from "./trajectory.js";
+import * as tsProtocol from "./protocol.js";
+import * as tsConfig from "./config.js";
+import * as tsRegistry from "./registry.js";
+import * as tsGatekeeper from "./gatekeeper.js";
+
+let wasmReady = false;
 if (KERNEL_WASM_READY) {
-  // `init` accepts a Uint8Array directly (wasm-bindgen `--target web`).
-  await init(Buffer.from(KERNEL_WASM_BASE64, "base64"));
+  try {
+    // `init` accepts a Uint8Array directly (wasm-bindgen `--target web`).
+    await init(Buffer.from(KERNEL_WASM_BASE64, "base64"));
+    wasmReady = true;
+  } catch (error) {
+    console.warn(
+      "[wasm-kernel] WASM init failed; falling back to TypeScript implementations:",
+      error,
+    );
+  }
 }
 
 // --- scheduler ---------------------------------------------------------------
 
 export function extractToolNames(toolResults: readonly unknown[]): Set<string> {
+  if (!wasmReady) return tsScheduler.extractToolNames(toolResults);
   return new Set(JSON.parse(schedulerExtractToolNames(JSON.stringify(toolResults))) as string[]);
 }
 
@@ -62,6 +86,7 @@ export function shouldEvaluateHeartbeat(
   toolsOrResults: readonly unknown[] | ReadonlySet<string>,
   heartbeatTools?: readonly string[],
 ): boolean {
+  if (!wasmReady) return tsScheduler.shouldEvaluateHeartbeat(toolsOrResults, heartbeatTools);
   const toolNames =
     toolsOrResults instanceof Set
       ? Array.from(toolsOrResults as ReadonlySet<string>)
@@ -72,6 +97,7 @@ export function shouldEvaluateHeartbeat(
 }
 
 export function shouldEvaluateFinalResponse(messages: readonly unknown[]): boolean {
+  if (!wasmReady) return tsScheduler.shouldEvaluateFinalResponse(messages);
   return schedulerShouldEvaluateFinalResponse(JSON.stringify(messages));
 }
 
@@ -87,6 +113,7 @@ export function selectCandidates(options: {
   runningExcluded: string[];
   toolFiltered: string[];
 } {
+  if (!wasmReady) return tsScheduler.selectCandidates(options);
   const executedTools = options.executedTools
     ? Array.from(options.executedTools as ReadonlySet<string>)
     : undefined;
@@ -107,6 +134,7 @@ export function decideFinalResponse(options: {
   mainModelId: string;
   canRunFinalResponse?: (shadow: ShadowDefinition) => boolean;
 }): ShadowActivationDecision {
+  if (!wasmReady) return tsScheduler.decideFinalResponse(options);
   // JS callback can't cross the WASM boundary → precompute a {id: bool} map.
   const canRunMap = options.canRunFinalResponse
     ? Object.fromEntries(
@@ -123,6 +151,7 @@ export function decideFinalResponse(options: {
 }
 
 export function matchesModel(shadow: ShadowDefinition, fullModelId: string): boolean {
+  if (!wasmReady) return tsScheduler.matchesModel(shadow, fullModelId);
   return schedulerMatchesModel(JSON.stringify({ shadow, mainModelId: fullModelId }));
 }
 
@@ -130,6 +159,7 @@ export function matchesActivationTools(
   shadow: ShadowDefinition,
   executedTools?: ReadonlySet<string> | readonly string[],
 ): boolean {
+  if (!wasmReady) return tsScheduler.matchesActivationTools(shadow, executedTools);
   const tools = executedTools
     ? Array.from(executedTools as ReadonlySet<string>)
     : undefined;
@@ -139,26 +169,32 @@ export function matchesActivationTools(
 // --- usage -------------------------------------------------------------------
 
 export function zeroUsage(): ShadowUsage {
+  if (!wasmReady) return tsUsage.zeroUsage();
   return JSON.parse(usageZeroUsage()) as ShadowUsage;
 }
 
 export function addUsage(left: ShadowUsage, right: ShadowUsage): ShadowUsage {
+  if (!wasmReady) return tsUsage.addUsage(left, right);
   return JSON.parse(usageAdd(JSON.stringify({ left, right }))) as ShadowUsage;
 }
 
 export function formatUsageTokens(tokens: number): string {
+  if (!wasmReady) return tsUsage.formatUsageTokens(tokens);
   return usageFormatTokens(tokens);
 }
 
 export function formatUsageCost(cost: number): string {
+  if (!wasmReady) return tsUsage.formatUsageCost(cost);
   return usageFormatCost(cost);
 }
 
 export function formatUsageSummary(usage: ShadowUsage): string {
+  if (!wasmReady) return tsUsage.formatUsageSummary(usage);
   return usageFormatSummary(JSON.stringify(usage));
 }
 
 export function formatUsageDetail(scope: string, usage: ShadowUsage): string {
+  if (!wasmReady) return tsUsage.formatUsageDetail(scope, usage);
   return usageFormatDetail(JSON.stringify({ scope, usage }));
 }
 
@@ -169,6 +205,7 @@ export function cleanStringArray(
   fallback: readonly string[],
   name: string,
 ): string[] {
+  if (!wasmReady) return tsValidation.cleanStringArray(value, fallback as string[], name);
   // undefined → omit the field (Rust treats absent as fallback);
   // null → include null (Rust errors, matching TS throwing on null).
   const input = value === undefined ? { fallback, name } : { value, fallback, name };
@@ -176,20 +213,24 @@ export function cleanStringArray(
 }
 
 export function isThinkingLevel(value: unknown): boolean {
+  if (!wasmReady) return tsValidation.isThinkingLevel(value);
   return validationIsThinkingLevel(JSON.stringify(value ?? null));
 }
 
 export function isStringArray(value: unknown): boolean {
+  if (!wasmReady) return tsValidation.isStringArray(value);
   return validationIsStringArray(JSON.stringify(value ?? null));
 }
 
 // --- summaries / trajectory / protocol ---------------------------------------
 
 export function summarizeToolResult(result: unknown): string {
+  if (!wasmReady) return tsSummaries.summarizeToolResult(result as ToolResultLike);
   return summariesSummarizeToolResult(JSON.stringify(result));
 }
 
 export function serializeTrajectory(messages: readonly unknown[]): string {
+  if (!wasmReady) return tsTrajectory.serializeTrajectory(messages as readonly MessageLike[]);
   return trajectorySerialize(JSON.stringify(messages));
 }
 
@@ -198,16 +239,19 @@ export function buildShadowRequest(
   shadow: ShadowDefinition,
   brief?: string,
 ): string {
+  if (!wasmReady) return tsProtocol.buildShadowRequest(trajectory, shadow, brief);
   return protocolBuildShadowRequest(JSON.stringify({ trajectory, shadow, brief }));
 }
 
 // --- config / registry -------------------------------------------------------
 
-export function parseConfig(raw: string): ShadowConfig {
-  return JSON.parse(configParse(raw)) as ShadowConfig;
+export function parseConfig(input: unknown): ShadowConfig {
+  if (!wasmReady) return tsConfig.parseConfig(input);
+  return JSON.parse(configParse(JSON.stringify(input))) as ShadowConfig;
 }
 
 export function serializeConfig(config: ShadowConfig): string {
+  if (!wasmReady) return tsConfig.serializeConfig(config);
   return configSerialize(JSON.stringify(config));
 }
 
@@ -217,6 +261,7 @@ export function parseShadowDefinition(
   filePath: string,
   fallbackId: string,
 ): ShadowDefinition {
+  if (!wasmReady) return tsRegistry.parseShadowDefinition(meta, body, filePath, fallbackId);
   return JSON.parse(
     registryParseShadowDefinition(JSON.stringify({ meta, body, filePath, fallbackId })),
   ) as ShadowDefinition;
@@ -228,6 +273,7 @@ export function buildGatekeeperPrompt(
   candidates: readonly ShadowDefinition[],
   trajectory: string,
 ): { systemPrompt: string; userMessage: string; candidateSummaries: string } {
+  if (!wasmReady) return tsGatekeeper.buildGatekeeperPrompt(candidates, trajectory);
   return JSON.parse(gatekeeperBuildPrompt(JSON.stringify({ candidates, trajectory })));
 }
 
@@ -236,6 +282,7 @@ export function fitTrajectory(
   contextWindowChars: number,
   reservedChars = 0,
 ): { text: string; truncated: boolean } {
+  if (!wasmReady) return tsGatekeeper.fitTrajectory(trajectory, contextWindowChars, reservedChars);
   return JSON.parse(
     gatekeeperFitTrajectory(JSON.stringify({ trajectory, contextWindowChars, reservedChars })),
   );
@@ -245,6 +292,7 @@ export function parseGatekeeperReply(
   text: string,
   candidateIds: ReadonlySet<string>,
 ): GatekeeperActivation[] {
+  if (!wasmReady) return tsGatekeeper.parseGatekeeperReply(text, candidateIds);
   return JSON.parse(
     gatekeeperParseReply(JSON.stringify({ text, candidateIds: Array.from(candidateIds) })),
   ) as GatekeeperActivation[];

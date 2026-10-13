@@ -2,7 +2,7 @@ import { mkdir, readFile, stat, unlink } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import YAML from "yaml";
 import { atomicWriteFile } from "./atomic-file.js";
-import { serializeConfig } from "./config.js";
+import { serializeConfig } from "./wasm-kernel.js";
 import { parseShadowMarkdown, ShadowRegistry } from "./registry.js";
 import type { ShadowConfig, ShadowDefinition } from "./types.js";
 

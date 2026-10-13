@@ -1,5 +1,5 @@
 interface ContentBlock { type?: string; text?: string; [key: string]: unknown }
-interface ToolResultLike { toolName?: string; content?: unknown; isError?: boolean }
+export interface ToolResultLike { toolName?: string; content?: unknown; isError?: boolean }
 
 type Summarizer = (result: ToolResultLike) => string;
 

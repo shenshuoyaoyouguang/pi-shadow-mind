@@ -43,7 +43,7 @@
   },
   "scripts": {
     "clean": "node -e \"for(const path of ['dist','.build'])require('node:fs').rmSync(path,{recursive:true,force:true})\"",
-    "build": "npm run clean && tsc -p tsconfig.build.json && node scripts/build.mjs",
+    "build": "node rust/build-wasm.mjs && npm run clean && tsc -p tsconfig.build.json && node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "verify": "npm run typecheck && npm test",

@@ -21,19 +21,25 @@ import { ReportBatcher, formatReportBatch } from "./report-batcher.js";
 import { ReportBrowser } from "./report-browser.js";
 import { buildShadowSessionContext } from "./acp-projection.js";
 import {
+  addUsage,
   decideFinalResponse,
   extractToolNames,
+  formatUsageCost,
+  formatUsageDetail,
+  formatUsageSummary,
+  formatUsageTokens,
   selectCandidates,
+  serializeTrajectory,
   shouldEvaluateFinalResponse,
   shouldEvaluateHeartbeat,
-} from "./scheduler.js";
+  zeroUsage,
+} from "./wasm-kernel.js";
 import { SessionLifetime } from "./session-lifetime.js";
 import {
   ShadowRunner,
   resolveShadowTools,
   type ShadowRunResult,
 } from "./shadow-runner.js";
-import { serializeTrajectory } from "./trajectory.js";
 import { waitForSettled } from "./shutdown-drain.js";
 import type {
   RegistrySnapshot,
@@ -42,15 +48,7 @@ import type {
   ShadowReport,
 } from "./types.js";
 import { UsageStore } from "./usage-store.js";
-import {
-  addUsage,
-  formatUsageCost,
-  formatUsageDetail,
-  formatUsageSummary,
-  formatUsageTokens,
-  zeroUsage,
-  type ShadowUsage,
-} from "./usage.js";
+import type { ShadowUsage } from "./usage.js";
 
 const SESSION_TEARDOWN_TIMEOUT_MS = 1_000;
 const ABORT_GRACE_MS = 5_000;

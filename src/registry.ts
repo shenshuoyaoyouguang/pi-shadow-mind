@@ -105,13 +105,27 @@ export function parseShadowMarkdown(source: string, filePath: string): ShadowDef
   const match = /^---\s*\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n|$)([\s\S]*)$/.exec(source);
   if (!match) throw new Error("missing YAML frontmatter");
   const meta = YAML.parse(match[1]) as unknown;
+  const body = match[2].trim();
+  const fallbackId = basename(filePath, extname(filePath));
+  return parseShadowDefinition(meta, body, filePath, fallbackId);
+}
+
+/**
+ * Field extraction from an already-parsed frontmatter object + body. Mirrors the
+ * Rust `parse_shadow_definition` kernel export so the WASM boundary can call
+ * either side interchangeably; `parseShadowMarkdown` keeps the YAML split.
+ */
+export function parseShadowDefinition(
+  meta: unknown,
+  body: string,
+  filePath: string,
+  fallbackId: string,
+): ShadowDefinition {
   if (!meta || typeof meta !== "object" || Array.isArray(meta)) throw new Error("frontmatter must be an object");
   const value = meta as Record<string, unknown>;
-  const fallbackId = basename(filePath, extname(filePath));
   const id = stringValue(value.id, fallbackId, "id");
   if (!ID_PATTERN.test(id)) throw new Error("id must match [a-z0-9][a-z0-9_-]*");
-  const prompt = match[2].trim();
-  if (!prompt) throw new Error("shadow prompt body is empty");
+  if (!body) throw new Error("shadow prompt body is empty");
   // Null prototype: a plain object would route a `__proto__` key through the
   // inherited setter and silently drop it from the serialized frontmatter.
   const extraFields: Record<string, unknown> = Object.create(null);
@@ -131,7 +145,7 @@ export function parseShadowMarkdown(source: string, filePath: string): ShadowDef
     finalResponseRounds: optionalNonNegativeInteger(value.final_response_rounds, "final_response_rounds"),
     activationTools: cleanStringArray(value.activation_tools, [], "activation_tools"),
     tools: cleanStringArray(value.tools, [], "tools"),
-    prompt,
+    prompt: body,
     filePath,
     ...(Object.keys(extraFields).length ? { extraFields } : {}),
   };
