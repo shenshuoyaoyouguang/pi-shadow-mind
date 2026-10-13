@@ -15,14 +15,6 @@ pub fn is_finite_number(value: &Value) -> bool {
     value.as_f64().map_or(false, |n| n.is_finite())
 }
 
-pub fn in_range(value: f64, min: f64, max: f64) -> bool {
-    value >= min && value <= max
-}
-
-pub fn is3_non_empty_string(value: &Value) -> bool {
-    value.as_str().map_or(false, |s| !s.trim().is_empty())
-}
-
 pub fn is_non_empty_string(value: &Value) -> bool {
     value.as_str().map_or(false, |s| !s.trim().is_empty())
 }
@@ -43,20 +35,25 @@ pub fn clean_string_array(
 ) -> Result<Vec<String>, String> {
     match value {
         None => Ok(fallback.to_vec()),
-        Some(v) => {
-            if !is_string_array(v) {
-                return Err(format!("{} must be an array of non-empty strings", name));
-            }
+        Some(Value::Array(arr)) => {
             let mut seen = HashSet::new();
             let mut out = Vec::new();
-            for item in v.as_array().unwrap() {
-                let s = item.as_str().unwrap().trim().to_string();
+            for item in arr {
+                let raw = item
+                    .as_str()
+                    .ok_or_else(|| format!("{} must be an array of non-empty strings", name))?;
+                let trimmed = raw.trim();
+                if trimmed.is_empty() {
+                    return Err(format!("{} must be an array of non-empty strings", name));
+                }
+                let s = trimmed.to_string();
                 if seen.insert(s.clone()) {
                     out.push(s);
                 }
             }
             Ok(out)
         }
+        Some(_) => Err(format!("{} must be an array of non-empty strings", name)),
     }
 }
 

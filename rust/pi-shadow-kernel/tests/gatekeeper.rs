@@ -145,3 +145,79 @@ fn build_prompt_uses_none_when_no_candidates() {
     let prompt = build_gatekeeper_prompt(&[], "TRAJ");
     assert_eq!(prompt.candidate_summaries, "(none)");
 }
+
+// ---- parse_gatekeeper_reply: rejection and skip branches ----
+
+#[test]
+fn parse_reply_skips_duplicate_and_unknown_ids() {
+    let out = activations(
+        r#"{"activations":[{"id":"a"},{"id":"a"},{"id":"ghost"}]}"#,
+        &["a", "b"],
+    );
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].id, "a");
+}
+
+#[test]
+fn parse_reply_skips_entry_without_id() {
+    let out = activations(r#"{"activations":[{"brief":"no id"},{"id":"b"}]}"#, &["a", "b"]);
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].id, "b");
+}
+
+#[test]
+fn parse_reply_defaults_missing_brief_to_empty() {
+    let out = activations(r#"{"activations":[{"id":"a"}]}"#, &["a"]);
+    assert_eq!(out[0].brief, "");
+}
+
+#[test]
+fn parse_reply_skips_non_object_entry() {
+    let out = activations(r#"{"activations":["str", 42, {"id":"a"}]}"#, &["a"]);
+    assert_eq!(out.len(), 1);
+}
+
+#[test]
+fn parse_reply_empty_activations_is_ok() {
+    let out = activations(r#"{"activations":[]}"#, &["a"]);
+    assert!(out.is_empty());
+}
+
+#[test]
+fn parse_reply_activations_not_array_is_error() {
+    assert!(parse_gatekeeper_reply(r#"{"activations":"nope"}"#, &ids(&["a"])).is_err());
+    assert!(parse_gatekeeper_reply(r#"{"activations":{}}"#, &ids(&["a"])).is_err());
+}
+
+// ---- fit_trajectory: budget boundaries ----
+
+#[test]
+fn fit_budget_zero_returns_empty_truncated() {
+    let (text, truncated) = fit_trajectory("USER: hi", 0, 0);
+    assert!(text.is_empty());
+    assert!(truncated);
+}
+
+#[test]
+fn fit_reserved_exceeds_context_yields_empty() {
+    let (text, truncated) = fit_trajectory("USER: hi", 10, 20);
+    assert!(text.is_empty());
+    assert!(truncated);
+}
+
+#[test]
+fn fit_exactly_at_budget_not_truncated() {
+    // "USER: hi" is 8 UTF-16 units; a budget of exactly 8 keeps it whole.
+    let (text, truncated) = fit_trajectory("USER: hi", 8, 0);
+    assert_eq!(text, "USER: hi");
+    assert!(!truncated);
+}
+
+#[test]
+fn fit_no_user_segment_keeps_tail_only() {
+    let traj = "MAIN: a\nTOOL: b";
+    let (text, truncated) = fit_trajectory(traj, 10, 0);
+    assert!(truncated);
+    assert!(text.contains("TOOL: b"));
+    assert!(!text.contains("MAIN: a"));
+}

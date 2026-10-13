@@ -1,7 +1,7 @@
 //! Behavior equivalence for `registry.rs` (mirrors `test/registry.test.ts` intent).
 
 use pi_shadow_kernel::registry::parse_shadow_definition;
-use pi_shadow_kernel::types::ShadowTrigger;
+use pi_shadow_kernel::types::{ShadowTrigger, ThinkingLevel};
 use serde_json::{json, Value};
 
 #[test]
@@ -64,4 +64,49 @@ fn accepts_string_trigger_as_single_element() {
     let meta = json!({"trigger": "final_response"});
     let def = parse_shadow_definition(&meta, "p", "f.md", "x").unwrap();
     assert_eq!(def.trigger, vec![ShadowTrigger::FinalResponse]);
+}
+
+#[test]
+fn rejects_non_object_frontmatter() {
+    assert!(parse_shadow_definition(&json!(42), "p", "f.md", "x").is_err());
+    assert!(parse_shadow_definition(&json!("string"), "p", "f.md", "x").is_err());
+}
+
+#[test]
+fn rejects_non_boolean_enabled() {
+    let meta = json!({"enabled": "yes"});
+    assert!(parse_shadow_definition(&meta, "p", "f.md", "x").is_err());
+}
+
+#[test]
+fn rejects_non_positive_timeout() {
+    assert!(parse_shadow_definition(&json!({"timeout_seconds": 0}), "p", "f.md", "x").is_err());
+    assert!(parse_shadow_definition(&json!({"timeout_seconds": -5}), "p", "f.md", "x").is_err());
+    assert!(parse_shadow_definition(&json!({"timeout_seconds": "fast"}), "p", "f.md", "x").is_err());
+}
+
+#[test]
+fn rejects_negative_and_fractional_rounds() {
+    assert!(parse_shadow_definition(&json!({"final_response_rounds": -1}), "p", "f.md", "x").is_err());
+    assert!(parse_shadow_definition(&json!({"final_response_rounds": 1.5}), "p", "f.md", "x").is_err());
+}
+
+#[test]
+fn accepts_multiple_triggers_deduped() {
+    let meta = json!({"trigger": ["heartbeat", "final_response", "heartbeat"]});
+    let def = parse_shadow_definition(&meta, "p", "f.md", "x").unwrap();
+    assert_eq!(def.trigger, vec![ShadowTrigger::Heartbeat, ShadowTrigger::FinalResponse]);
+}
+
+#[test]
+fn accepts_run_with_model_and_thinking_level() {
+    let meta = json!({"run_with_model": "anthropic/claude", "thinking_level": "high"});
+    let def = parse_shadow_definition(&meta, "p", "f.md", "x").unwrap();
+    assert_eq!(def.run_with_model.as_deref(), Some("anthropic/claude"));
+    assert_eq!(def.thinking_level, Some(ThinkingLevel::High));
+}
+
+#[test]
+fn rejects_invalid_thinking_level() {
+    assert!(parse_shadow_definition(&json!({"thinking_level": "bogus"}), "p", "f.md", "x").is_err());
 }

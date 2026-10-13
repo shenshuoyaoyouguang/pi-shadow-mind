@@ -335,3 +335,77 @@ fn decide_final_response_round_limit() {
     );
     assert_eq!(out.round_filtered, vec!["limited".to_string()]);
 }
+
+// ---- matches_model: direct unit tests for pattern matching edge cases ----
+
+#[test]
+fn matches_model_empty_returns_false() {
+    let s = with_models(shadow("s", hb(), vec![]), vec![]);
+    assert!(!matches_model(&s, "openai/gpt"));
+}
+
+#[test]
+fn matches_model_wildcard_matches_all() {
+    let s = with_models(shadow("s", hb(), vec![]), vec!["*"]);
+    assert!(matches_model(&s, "anything/here"));
+}
+
+#[test]
+fn matches_model_exact_and_provider_split() {
+    let s = with_models(shadow("s", hb(), vec![]), vec!["openai/gpt"]);
+    assert!(matches_model(&s, "openai/gpt"));
+    assert!(!matches_model(&s, "openai/other"));
+    // Provider-less pattern matches the model part after '/'.
+    let s = with_models(shadow("s", hb(), vec![]), vec!["gpt"]);
+    assert!(matches_model(&s, "openai/gpt"));
+}
+
+#[test]
+fn matches_model_wildcard_suffix() {
+    let s = with_models(shadow("s", hb(), vec![]), vec!["anthropic/*"]);
+    assert!(matches_model(&s, "anthropic/claude"));
+    assert!(!matches_model(&s, "openai/gpt"));
+}
+
+#[test]
+fn matches_model_negative_excludes() {
+    let s = with_models(shadow("s", hb(), vec![]), vec!["*", "!openai/gpt"]);
+    assert!(!matches_model(&s, "openai/gpt"));
+    assert!(matches_model(&s, "anthropic/claude"));
+}
+
+#[test]
+fn matches_model_negative_only() {
+    let s = with_models(shadow("s", hb(), vec![]), vec!["!openai/gpt"]);
+    assert!(!matches_model(&s, "openai/gpt"));
+    assert!(matches_model(&s, "anthropic/claude"));
+}
+
+#[test]
+fn matches_model_dot_is_literal_in_wildcard() {
+    // In "a.*b" the '*' is wildcard but '.' is literal → matches "a.xb", not "axb".
+    let s = with_models(shadow("s", hb(), vec![]), vec!["a.*b"]);
+    assert!(matches_model(&s, "a.xb"));
+    assert!(!matches_model(&s, "axb"));
+}
+
+// ---- should_evaluate_final_response: remaining edge cases ----
+
+#[test]
+fn final_response_empty_and_non_assistant() {
+    assert!(!should_evaluate_final_response(&[]));
+    let msgs = vec![json!({"role": "user", "content": "hi"})];
+    assert!(!should_evaluate_final_response(&msgs));
+}
+
+#[test]
+fn final_response_assistant_empty_string_is_false() {
+    let msgs = vec![json!({"role": "assistant", "content": "   "})];
+    assert!(!should_evaluate_final_response(&msgs));
+}
+
+#[test]
+fn final_response_assistant_only_toolcall_is_false() {
+    let msgs = vec![json!({"role": "assistant", "content": [{"type": "toolCall", "name": "read"}]})];
+    assert!(!should_evaluate_final_response(&msgs));
+}

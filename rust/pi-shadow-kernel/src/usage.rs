@@ -8,12 +8,12 @@ pub fn zero_usage() -> ShadowUsage {
 
 pub fn add_usage(left: &ShadowUsage, right: &ShadowUsage) -> ShadowUsage {
     ShadowUsage {
-        requests: left.requests + right.requests,
-        input: left.input + right.input,
-        output: left.output + right.output,
-        cache_read: left.cache_read + right.cache_read,
-        cache_write: left.cache_write + right.cache_write,
-        total_tokens: left.total_tokens + right.total_tokens,
+        requests: left.requests.saturating_add(right.requests),
+        input: left.input.saturating_add(right.input),
+        output: left.output.saturating_add(right.output),
+        cache_read: left.cache_read.saturating_add(right.cache_read),
+        cache_write: left.cache_write.saturating_add(right.cache_write),
+        total_tokens: left.total_tokens.saturating_add(right.total_tokens),
         cost: ShadowUsageCost {
             input: left.cost.input + right.cost.input,
             output: left.cost.output + right.cost.output,

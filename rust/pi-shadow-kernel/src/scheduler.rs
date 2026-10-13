@@ -242,10 +242,7 @@ fn has_trigger(shadow: &ShadowDefinition, trigger: ShadowTrigger) -> bool {
 }
 
 fn model_pattern_matches(pattern: &str, full_model_id: &str) -> bool {
-    if pattern == "*" {
-        return true;
-    }
-    if pattern == full_model_id {
+    if pattern == "*" || pattern == full_model_id {
         return true;
     }
     let model_id = match full_model_id.find('/') {
@@ -256,12 +253,13 @@ fn model_pattern_matches(pattern: &str, full_model_id: &str) -> bool {
         return true;
     }
     if pattern.contains('*') {
-        let re = wildcard_to_regex(pattern);
-        if re.is_match(full_model_id) {
-            return true;
-        }
-        if !pattern.contains('/') && re.is_match(model_id) {
-            return true;
+        if let Ok(re) = wildcard_to_regex(pattern) {
+            if re.is_match(full_model_id) {
+                return true;
+            }
+            if !pattern.contains('/') && re.is_match(model_id) {
+                return true;
+            }
         }
     }
     false
@@ -270,7 +268,11 @@ fn model_pattern_matches(pattern: &str, full_model_id: &str) -> bool {
 /// Mirror of `wildcardToRegex`: escape `.+^${}()|[]\` (not `*`), turn `*` into
 /// `.*`, anchor with `^...$`. Other characters (e.g. `?`, `-`, `/`) stay literal,
 /// matching the JS source exactly.
-fn wildcard_to_regex(pattern: &str) -> Regex {
+/// Returns `Err` only if the escaped pattern fails to compile — which the
+/// escaping above makes impossible for valid input, but we surface it instead of
+/// panicking so a malformed `active_for_models` entry degrades to "no match"
+/// rather than aborting the scheduler.
+fn wildcard_to_regex(pattern: &str) -> Result<Regex, regex::Error> {
     let mut out = String::from("^");
     for c in pattern.chars() {
         match c {
@@ -283,5 +285,5 @@ fn wildcard_to_regex(pattern: &str) -> Regex {
         }
     }
     out.push('$');
-    Regex::new(&out).expect("wildcard pattern must compile")
+    Regex::new(&out)
 }

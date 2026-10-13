@@ -86,3 +86,43 @@ fn rejects_non_positive_parallel() {
     assert!(parse_config(r#"{"max_parallel_shadows":0}"#).is_err());
     assert!(parse_config(r#"{"max_parallel_shadows":-1}"#).is_err());
 }
+
+#[test]
+fn rejects_non_integer_parallel() {
+    assert!(parse_config(r#"{"max_parallel_shadows":2.5}"#).is_err());
+}
+
+#[test]
+fn rejects_string_for_numeric_field() {
+    assert!(parse_config(r#"{"max_parallel_shadows":"two"}"#).is_err());
+}
+
+#[test]
+fn rejects_null_element_in_heartbeat_tools() {
+    assert!(parse_config(r#"{"heartbeat_tools":["read",null]}"#).is_err());
+}
+
+#[test]
+fn result_batch_window_allows_zero() {
+    let cfg = parse_config(r#"{"result_batch_window_ms":0}"#).expect("zero allowed");
+    assert_eq!(cfg.result_batch_window_ms, 0);
+}
+
+#[test]
+fn rejects_negative_and_fractional_window() {
+    assert!(parse_config(r#"{"result_batch_window_ms":-1}"#).is_err());
+    assert!(parse_config(r#"{"result_batch_window_ms":1.5}"#).is_err());
+}
+
+#[test]
+fn rejects_empty_default_shadow_model() {
+    assert!(parse_config(r#"{"default_shadow_model":"  "}"#).is_err());
+}
+
+#[test]
+fn serialize_includes_gatekeeper_and_extra_fields() {
+    let cfg = parse_config(r#"{"gatekeeper_model":"openai/gpt","custom":7}"#).expect("parse");
+    let out = serialize_config(&cfg);
+    assert!(out.contains("\"gatekeeper_model\": \"openai/gpt\""));
+    assert!(out.contains("\"custom\": 7"));
+}
